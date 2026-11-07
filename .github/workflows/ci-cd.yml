@@ -2,17 +2,13 @@
 # (and manual workflow_dispatch).
 #
 # Uses the GitHub Environment named "production" (Settings → Environments).
-# Required Environment secrets:
+# Required Environment secrets (no hardcoded defaults):
 #   SSH_HOST                    - server hostname or IP (hPanel → Advanced → SSH Access)
+#   SSH_USER                    - SSH username
+#   SSH_PORT                    - SSH port
+#   SSH_DEPLOY_PATH             - Laravel root on the server (…/public_html/chat)
 #   HOSTINGER_SSH_PRIVATE_KEY   - private SSH key (full PEM / OpenSSH block, trailing newline)
 #                                 whose public half is added under Hostinger → SSH Access
-#
-# Optional Environment secrets (override defaults below):
-#   SSH_USER          - defaults to u506226831
-#   SSH_PORT          - defaults to 65002
-#   SSH_DEPLOY_PATH   - defaults to SmackChat Laravel root:
-#                       /home/u506226831/domains/lbycargo.com/public_html/chat
-#                       (document root for chat.lbycargo.com must be …/chat/public)
 #
 name: CI/CD
 
@@ -90,9 +86,9 @@ jobs:
     timeout-minutes: 30
 
     env:
-      DEPLOY_USER: ${{ secrets.SSH_USER || 'u506226831' }}
-      DEPLOY_PORT: ${{ secrets.SSH_PORT || '65002' }}
-      DEPLOY_PATH: ${{ secrets.SSH_DEPLOY_PATH || '/home/u506226831/domains/lbycargo.com/public_html/chat' }}
+      DEPLOY_USER: ${{ secrets.SSH_USER }}
+      DEPLOY_PORT: ${{ secrets.SSH_PORT }}
+      DEPLOY_PATH: ${{ secrets.SSH_DEPLOY_PATH }}
       SSH_OPTS: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=30
 
     steps:
@@ -108,15 +104,20 @@ jobs:
       - name: Require SSH secrets
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_DEPLOY_PATH: ${{ secrets.SSH_DEPLOY_PATH }}
           HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${SSH_HOST:-}" ]; then
-            echo "::error::SSH_HOST is empty. Add it under Settings → Environments → production."
-            exit 1
-          fi
-          if [ -z "${HOSTINGER_SSH_PRIVATE_KEY:-}" ]; then
-            echo "::error::HOSTINGER_SSH_PRIVATE_KEY is empty. Add it under Settings → Environments → production."
+          missing=0
+          for name in SSH_HOST SSH_USER SSH_PORT SSH_DEPLOY_PATH HOSTINGER_SSH_PRIVATE_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is empty. Add it under Settings → Environments → production."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
             exit 1
           fi
           if ! printf '%s' "$HOSTINGER_SSH_PRIVATE_KEY" | grep -q 'BEGIN.*PRIVATE KEY'; then
@@ -217,9 +218,9 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER || 'u506226831' }}
+          username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || 65002 }}
+          port: ${{ secrets.SSH_PORT }}
           timeout: 60s
           command_timeout: 30m
           request_pty: true
