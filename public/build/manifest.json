@@ -1,0 +1,184 @@
+{
+  "_ShiftWidget-BYNj-tcU.js": {
+    "file": "assets/ShiftWidget-BYNj-tcU.js",
+    "name": "ShiftWidget",
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "_time-DNmDjjkW.js": {
+    "file": "assets/time-DNmDjjkW.js",
+    "name": "time",
+    "imports": [
+      "resources/js/app.js"
+    ]
+  },
+  "node_modules/primeicons/fonts/primeicons.eot": {
+    "file": "assets/primeicons-BZF8q66I.eot",
+    "src": "node_modules/primeicons/fonts/primeicons.eot"
+  },
+  "node_modules/primeicons/fonts/primeicons.svg": {
+    "file": "assets/primeicons-BmvFdQzO.svg",
+    "src": "node_modules/primeicons/fonts/primeicons.svg"
+  },
+  "node_modules/primeicons/fonts/primeicons.ttf": {
+    "file": "assets/primeicons-vaISzP8W.ttf",
+    "src": "node_modules/primeicons/fonts/primeicons.ttf"
+  },
+  "node_modules/primeicons/fonts/primeicons.woff": {
+    "file": "assets/primeicons-qgkbr2_s.woff",
+    "src": "node_modules/primeicons/fonts/primeicons.woff"
+  },
+  "node_modules/primeicons/fonts/primeicons.woff2": {
+    "file": "assets/primeicons-BvM4qbWp.woff2",
+    "src": "node_modules/primeicons/fonts/primeicons.woff2"
+  },
+  "resources/css/app.css": {
+    "file": "assets/app-D6lfQz7r.css",
+    "src": "resources/css/app.css",
+    "isEntry": true,
+    "name": "app",
+    "names": [
+      "app.css"
+    ]
+  },
+  "resources/js/app.js": {
+    "file": "assets/app-DFLFU9De.js",
+    "name": "app",
+    "src": "resources/js/app.js",
+    "isEntry": true,
+    "dynamicImports": [
+      "resources/js/views/AuthView.vue",
+      "resources/js/views/InviteView.vue",
+      "resources/js/views/RedirectHome.vue",
+      "resources/js/views/Shell.vue",
+      "resources/js/views/LoungeView.vue",
+      "resources/js/views/ChannelView.vue",
+      "resources/js/views/AttendanceView.vue",
+      "resources/js/views/HoursView.vue",
+      "resources/js/views/MembersView.vue",
+      "resources/js/views/SettingsView.vue",
+      "resources/js/views/BillingView.vue"
+    ],
+    "css": [
+      "assets/app-g2Zq-Zl_.css"
+    ],
+    "assets": [
+      "assets/primeicons-BZF8q66I.eot",
+      "assets/primeicons-BvM4qbWp.woff2",
+      "assets/primeicons-qgkbr2_s.woff",
+      "assets/primeicons-vaISzP8W.ttf",
+      "assets/primeicons-BmvFdQzO.svg"
+    ]
+  },
+  "resources/js/views/AttendanceView.vue": {
+    "file": "assets/AttendanceView-BycMe0BS.js",
+    "name": "AttendanceView",
+    "src": "resources/js/views/AttendanceView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "resources/js/views/AuthView.vue": {
+    "file": "assets/AuthView-jMCubUwc.js",
+    "name": "AuthView",
+    "src": "resources/js/views/AuthView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js"
+    ]
+  },
+  "resources/js/views/BillingView.vue": {
+    "file": "assets/BillingView-DvVveclW.js",
+    "name": "BillingView",
+    "src": "resources/js/views/BillingView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "resources/js/views/ChannelView.vue": {
+    "file": "assets/ChannelView-Dgx-MsRE.js",
+    "name": "ChannelView",
+    "src": "resources/js/views/ChannelView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "resources/js/views/HoursView.vue": {
+    "file": "assets/HoursView-CbfJmhwJ.js",
+    "name": "HoursView",
+    "src": "resources/js/views/HoursView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "resources/js/views/InviteView.vue": {
+    "file": "assets/InviteView-BkE2GC-6.js",
+    "name": "InviteView",
+    "src": "resources/js/views/InviteView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js"
+    ]
+  },
+  "resources/js/views/LoungeView.vue": {
+    "file": "assets/LoungeView-C0EaXQTh.js",
+    "name": "LoungeView",
+    "src": "resources/js/views/LoungeView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_ShiftWidget-BYNj-tcU.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "resources/js/views/MembersView.vue": {
+    "file": "assets/MembersView-Cr5zpN6D.js",
+    "name": "MembersView",
+    "src": "resources/js/views/MembersView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "resources/js/views/RedirectHome.vue": {
+    "file": "assets/RedirectHome-DOjRbxA5.js",
+    "name": "RedirectHome",
+    "src": "resources/js/views/RedirectHome.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js"
+    ]
+  },
+  "resources/js/views/SettingsView.vue": {
+    "file": "assets/SettingsView-C-NmS0x_.js",
+    "name": "SettingsView",
+    "src": "resources/js/views/SettingsView.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js"
+    ]
+  },
+  "resources/js/views/Shell.vue": {
+    "file": "assets/Shell-BCv-rB2J.js",
+    "name": "Shell",
+    "src": "resources/js/views/Shell.vue",
+    "isDynamicEntry": true,
+    "imports": [
+      "resources/js/app.js",
+      "_time-DNmDjjkW.js",
+      "_ShiftWidget-BYNj-tcU.js"
+    ]
+  }
+}
