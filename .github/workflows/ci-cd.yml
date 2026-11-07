@@ -10,8 +10,11 @@
 #   HOSTINGER_SSH_PRIVATE_KEY   - private SSH key (full PEM / OpenSSH block, trailing newline)
 #                                 whose public half is added under Hostinger → SSH Access
 #
-# Also add as a repository (or Environment) secret so the frontend build can bake it in:
-#   VITE_PRIMEVUE_LICENSE_KEY   - PrimeVue / PrimeUI license key (Vite inlines at build time)
+# Required Environment secret (Settings → Environments → production):
+#   VITE_PRIMEVUE_LICENSE_KEY   - PrimeVue / PrimeUI license key
+#                                 Vite inlines this at build time; server .env is ignored.
+#                                 Must be on the production Environment (not only repo secrets
+#                                 under a different name, and not only Hostinger .env).
 #
 name: CI/CD
 
@@ -69,19 +72,10 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # Vite inlines VITE_* at build time — server .env is never read by the browser bundle.
+      # PR/CI smoke build only. Licensed production assets are built in the deploy job
+      # (which has access to the production Environment secrets).
       - name: Build Vite assets
-        env:
-          VITE_PRIMEVUE_LICENSE_KEY: ${{ secrets.VITE_PRIMEVUE_LICENSE_KEY }}
         run: npm run build
-
-      - name: Upload build artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vite-build
-          path: public/build
-          retention-days: 3
 
   deploy:
     name: Deploy to Hostinger (SSH)
@@ -101,23 +95,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Vite build
-        uses: actions/download-artifact@v4
-        with:
-          name: vite-build
-          path: public/build
-
-      - name: Require SSH secrets
+      - name: Require deploy secrets
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_DEPLOY_PATH: ${{ secrets.SSH_DEPLOY_PATH }}
           HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+          VITE_PRIMEVUE_LICENSE_KEY: ${{ secrets.VITE_PRIMEVUE_LICENSE_KEY }}
         run: |
           set -euo pipefail
           missing=0
-          for name in SSH_HOST SSH_USER SSH_PORT SSH_DEPLOY_PATH HOSTINGER_SSH_PRIVATE_KEY; do
+          for name in SSH_HOST SSH_USER SSH_PORT SSH_DEPLOY_PATH HOSTINGER_SSH_PRIVATE_KEY VITE_PRIMEVUE_LICENSE_KEY; do
             if [ -z "${!name:-}" ]; then
               echo "::error::${name} is empty. Add it under Settings → Environments → production."
               missing=1
@@ -130,6 +119,30 @@ jobs:
             echo "::error::HOSTINGER_SSH_PRIVATE_KEY does not look like a private key (missing BEGIN PRIVATE KEY). Paste the private key file contents, not the .pub file."
             exit 1
           fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # Vite inlines VITE_* here — Hostinger .env is never read by the browser bundle.
+      - name: Build Vite assets with PrimeVue license
+        env:
+          VITE_PRIMEVUE_LICENSE_KEY: ${{ secrets.VITE_PRIMEVUE_LICENSE_KEY }}
+        run: |
+          set -euo pipefail
+          npm run build
+          # Confirm the exact secret was baked into the client bundle.
+          token_prefix="${VITE_PRIMEVUE_LICENSE_KEY:0:48}"
+          if ! grep -R -F --quiet "$token_prefix" public/build; then
+            echo "::error::Built assets are missing VITE_PRIMEVUE_LICENSE_KEY. Add it under Environments → production."
+            exit 1
+          fi
+          echo "PrimeVue license token verified in public/build."
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
