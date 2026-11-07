@@ -10,6 +10,9 @@
 #   HOSTINGER_SSH_PRIVATE_KEY   - private SSH key (full PEM / OpenSSH block, trailing newline)
 #                                 whose public half is added under Hostinger → SSH Access
 #
+# Also add as a repository (or Environment) secret so the frontend build can bake it in:
+#   VITE_PRIMEVUE_LICENSE_KEY   - PrimeVue / PrimeUI license key (Vite inlines at build time)
+#
 name: CI/CD
 
 on:
@@ -66,7 +69,10 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # Vite inlines VITE_* at build time — server .env is never read by the browser bundle.
       - name: Build Vite assets
+        env:
+          VITE_PRIMEVUE_LICENSE_KEY: ${{ secrets.VITE_PRIMEVUE_LICENSE_KEY }}
         run: npm run build
 
       - name: Upload build artifact
