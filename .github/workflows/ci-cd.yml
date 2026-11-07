@@ -1,3 +1,19 @@
+# CI on every PR / push. SSH deploy to Hostinger on push/merge to main
+# (and manual workflow_dispatch).
+#
+# Uses the GitHub Environment named "production" (Settings → Environments).
+# Required Environment secrets:
+#   SSH_HOST                    - server hostname or IP (hPanel → Advanced → SSH Access)
+#   HOSTINGER_SSH_PRIVATE_KEY   - private SSH key (full PEM / OpenSSH block, trailing newline)
+#                                 whose public half is added under Hostinger → SSH Access
+#
+# Optional Environment secrets (override defaults below):
+#   SSH_USER          - defaults to u506226831
+#   SSH_PORT          - defaults to 65002
+#   SSH_DEPLOY_PATH   - defaults to SmackChat Laravel root:
+#                       /home/u506226831/domains/lbycargo.com/public_html/chat
+#                       (document root for chat.lbycargo.com must be …/chat/public)
+#
 name: CI/CD
 
 on:
@@ -5,9 +21,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 concurrency:
   group: ci-cd-${{ github.workflow }}-${{ github.ref }}
@@ -69,16 +82,22 @@ jobs:
           retention-days: 3
 
   deploy:
-    name: Publish Hostinger deploy branch
+    name: Deploy to Hostinger (SSH)
     needs: [test, frontend]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+
+    env:
+      DEPLOY_USER: ${{ secrets.SSH_USER || 'u506226831' }}
+      DEPLOY_PORT: ${{ secrets.SSH_PORT || '65002' }}
+      DEPLOY_PATH: ${{ secrets.SSH_DEPLOY_PATH || '/home/u506226831/domains/lbycargo.com/public_html/chat' }}
+      SSH_OPTS: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Download Vite build
         uses: actions/download-artifact@v4
@@ -86,43 +105,130 @@ jobs:
           name: vite-build
           path: public/build
 
-      - name: Publish to deploy branch
+      - name: Require SSH secrets
         env:
-          DEPLOY_BRANCH: deploy
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          SOURCE_SHA="$(git rev-parse --short HEAD)"
-
-          # Hostinger watches this branch and runs composer install on pull.
-          git checkout -B "$DEPLOY_BRANCH"
-          git add -f public/build
-          git add -A
-
-          if git diff --cached --quiet; then
-            echo "No deployable changes."
-            exit 0
+          if [ -z "${SSH_HOST:-}" ]; then
+            echo "::error::SSH_HOST is empty. Add it under Settings → Environments → production."
+            exit 1
+          fi
+          if [ -z "${HOSTINGER_SSH_PRIVATE_KEY:-}" ]; then
+            echo "::error::HOSTINGER_SSH_PRIVATE_KEY is empty. Add it under Settings → Environments → production."
+            exit 1
+          fi
+          if ! printf '%s' "$HOSTINGER_SSH_PRIVATE_KEY" | grep -q 'BEGIN.*PRIVATE KEY'; then
+            echo "::error::HOSTINGER_SSH_PRIVATE_KEY does not look like a private key (missing BEGIN PRIVATE KEY). Paste the private key file contents, not the .pub file."
+            exit 1
           fi
 
-          git commit -m "deploy: ${SOURCE_SHA} (built assets for Hostinger)"
-          git push --force-with-lease origin "HEAD:${DEPLOY_BRANCH}"
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: mbstring, xml, ctype, json, bcmath, tokenizer, fileinfo, curl, openssl
+          coverage: none
+          tools: composer:v2
 
-          {
-            echo "### Deploy branch updated"
-            echo ""
-            echo "- Source: \`${SOURCE_SHA}\`"
-            echo "- Branch: \`${DEPLOY_BRANCH}\`"
-            echo "- Link Hostinger Git auto-deploy to \`Hammad-arshad18/SmackChat\` @ \`${DEPLOY_BRANCH}\` (type: PHP/static)."
-            echo ""
-            echo "First time on the server:"
-            echo "\`\`\`bash"
-            echo "cp .env.example .env   # then fill production values"
-            echo "php artisan key:generate"
-            echo "php artisan migrate --force"
-            echo "php artisan storage:link"
-            echo "php artisan config:cache && php artisan route:cache && php artisan view:cache"
-            echo "\`\`\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+      # Hostinger often disables proc_open, so package:discover must run here (not on the server).
+      - name: Discover Laravel packages for deploy
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          php -r "file_put_contents('.env', preg_replace('/^APP_KEY=.*/m', 'APP_KEY=base64:'.base64_encode(random_bytes(32)), file_get_contents('.env')));"
+          composer install \
+            --no-interaction \
+            --prefer-dist \
+            --optimize-autoloader \
+            --no-dev \
+            --ignore-platform-reqs
+          php artisan package:discover --ansi
+          test -f bootstrap/cache/packages.php
+          ls -la bootstrap/cache/
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+
+      - name: Verify SSH key login
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -p "$DEPLOY_PORT" $SSH_OPTS \
+            "${DEPLOY_USER}@${SSH_HOST}" \
+            "echo SSH_OK && test -d '${DEPLOY_PATH}' && echo DEPLOY_PATH_OK"
+
+      - name: Sync app files
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -euo pipefail
+          DEST="${DEPLOY_USER}@${SSH_HOST}:${DEPLOY_PATH}/"
+          RSH="ssh -p ${DEPLOY_PORT} ${SSH_OPTS}"
+
+          # No --delete: never remove server-only files (.env, uploads, caches, symlink).
+          rsync -az \
+            -e "$RSH" \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='node_modules/' \
+            --exclude='vendor/' \
+            --exclude='tests/' \
+            --exclude='phpunit.xml' \
+            --exclude='storage/logs/**' \
+            --exclude='storage/framework/cache/**' \
+            --exclude='storage/framework/sessions/**' \
+            --exclude='storage/framework/views/**' \
+            --exclude='storage/app/public/**' \
+            --exclude='public/storage' \
+            --exclude='bootstrap/cache/**' \
+            --exclude='smack-app/' \
+            ./ "$DEST"
+
+          ssh -p "$DEPLOY_PORT" $SSH_OPTS \
+            "${DEPLOY_USER}@${SSH_HOST}" \
+            "mkdir -p '${DEPLOY_PATH}/bootstrap/cache'"
+
+          scp -P "$DEPLOY_PORT" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o BatchMode=yes \
+            -o ConnectTimeout=30 \
+            bootstrap/cache/packages.php \
+            "${DEPLOY_USER}@${SSH_HOST}:${DEPLOY_PATH}/bootstrap/cache/packages.php"
+
+          if [ -f bootstrap/cache/services.php ]; then
+            scp -P "$DEPLOY_PORT" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes \
+              -o ConnectTimeout=30 \
+              bootstrap/cache/services.php \
+              "${DEPLOY_USER}@${SSH_HOST}:${DEPLOY_PATH}/bootstrap/cache/services.php"
+          fi
+
+      - name: Run remote deploy (composer, migrate, optimize)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER || 'u506226831' }}
+          key: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 65002 }}
+          timeout: 60s
+          command_timeout: 30m
+          request_pty: true
+          script_stop: true
+          envs: DEPLOY_PATH
+          script: |
+            set -euo pipefail
+            export PATH="$HOME/bin:/usr/local/bin:$PATH"
+            cd "$DEPLOY_PATH"
+            test -f deploy.sh
+            chmod +x deploy.sh
+            bash ./deploy.sh
