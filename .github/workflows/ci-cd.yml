@@ -119,6 +119,25 @@ jobs:
             echo "::error::HOSTINGER_SSH_PRIVATE_KEY does not look like a private key (missing BEGIN PRIVATE KEY). Paste the private key file contents, not the .pub file."
             exit 1
           fi
+          # PrimeUI keys are "payload.signature". A truncated paste (payload only) deploys
+          # cleanly but shows "Invalid PrimeUI License" in the browser.
+          key="$VITE_PRIMEVUE_LICENSE_KEY"
+          key="${key//$'\r'/}"
+          key="${key//$'\n'/}"
+          key="${key#"${key%%[![:space:]]*}"}"
+          key="${key%"${key##*[![:space:]]}"}"
+          payload="${key%%.*}"
+          signature="${key#*.}"
+          if [[ "$key" != *.* || -z "$payload" || -z "$signature" || "$signature" == "$key" ]]; then
+            echo "::error::VITE_PRIMEVUE_LICENSE_KEY looks truncated (need payload.signature). Re-paste the full key from .env with no line break."
+            echo "::error::Received length=${#key} (complete local keys are typically ~260 chars)."
+            exit 1
+          fi
+          if [ "${#key}" -lt 200 ]; then
+            echo "::error::VITE_PRIMEVUE_LICENSE_KEY is only ${#key} chars — almost certainly truncated. Re-paste the full value."
+            exit 1
+          fi
+          echo "VITE_PRIMEVUE_LICENSE_KEY length=${#key} (payload+signature present)."
 
       - name: Setup Node
         uses: actions/setup-node@v4
