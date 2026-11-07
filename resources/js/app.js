@@ -145,3 +145,11 @@ scheme?.addEventListener?.('change', () => {
 });
 
 app.mount('#app');
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+            // Installability is optional — never block the app if SW registration fails.
+        });
+    });
+}

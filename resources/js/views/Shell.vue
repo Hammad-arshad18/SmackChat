@@ -126,7 +126,7 @@ function onOfficeMessage(event) {
         const channel = office.channels.find((item) => item.id === message.channel_id);
         new Notification(channel?.label || office.workspace?.name || 'SmackChat', {
             body: `${message.user?.name || 'Someone'}: ${message.excerpt || 'New message'}`,
-            icon: '/favicon.svg',
+            icon: '/icons/icon-192.png',
             tag: `smack-${message.channel_id}`,
         });
     }
