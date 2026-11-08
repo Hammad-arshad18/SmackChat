@@ -1250,6 +1250,24 @@ kbd {
    Topbar
    -------------------------------------------------------------------------- */
 
+.alert-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border: 0;
+    background: #0e7c66;
+    color: #fff;
+    padding: 12px 16px;
+    text-align: left;
+    font-weight: 750;
+    cursor: pointer;
+}
+
+.alert-banner i {
+    font-size: 1rem;
+}
+
 .topbar {
     min-height: 66px;
     display: flex;

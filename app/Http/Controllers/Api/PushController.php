@@ -41,6 +41,11 @@ class PushController extends ApiController
         return response()->json(['ok' => true]);
     }
 
+    public function test(Request $request, WebPushNotifier $push)
+    {
+        return response()->json($push->ping($request->user()));
+    }
+
     public function destroy(Request $request)
     {
         $data = $request->validate([

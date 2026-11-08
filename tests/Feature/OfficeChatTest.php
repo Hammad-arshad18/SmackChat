@@ -5,11 +5,18 @@ namespace Tests\Feature;
 use App\Mail\RegistrationCodeMail;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\WebPushNotifier;
 use App\Services\WorkspaceProvisioner;
+use Base64Url\Base64Url;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
+use Minishlink\WebPush\VAPID;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Tests\TestCase;
 
 class OfficeChatTest extends TestCase
@@ -449,6 +456,68 @@ class OfficeChatTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_a_message_is_pushed_to_everyone_except_the_author(): void
+    {
+        $owner = $this->openOffice();
+        $worker = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
+
+        $vapid = VAPID::createVapidKeys();
+        config([
+            'webpush.subject' => 'mailto:notifications@smack.chat',
+            'webpush.public_key' => $vapid['publicKey'],
+            'webpush.private_key' => $vapid['privateKey'],
+        ]);
+
+        $client = new class implements ClientInterface
+        {
+            /** @var list<string> */
+            public array $urls = [];
+
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                $this->urls[] = (string) $request->getUri();
+
+                return new Response(201);
+            }
+        };
+
+        $push = new WebPushNotifier;
+        $push->useClient($client);
+        $this->app->instance(WebPushNotifier::class, $push);
+
+        foreach ([$owner, $worker] as $user) {
+            $keys = $this->browserPushKeys();
+            $this->actingAs($user, 'sanctum')->putJson('/api/push/subscription', [
+                'endpoint' => 'https://push.example.test/user/'.$user->id,
+                'public_key' => $keys['public'],
+                'auth_token' => $keys['auth'],
+                'content_encoding' => 'aes128gcm',
+            ])->assertOk();
+        }
+
+        $this->actingAs($worker, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
+            'document' => [
+                'type' => 'doc',
+                'content' => [[
+                    'type' => 'paragraph',
+                    'content' => [['type' => 'text', 'text' => 'Can you see this on your phone?']],
+                ]],
+            ],
+        ])->assertCreated();
+
+        $this->assertSame(['https://push.example.test/user/'.$owner->id], $client->urls);
+
+        $this->actingAs($owner, 'sanctum')
+            ->postJson('/api/push/test')
+            ->assertOk()
+            ->assertJsonPath('subscriptions', 1)
+            ->assertJsonPath('sent', 1);
+
+        $this->assertSame('https://push.example.test/user/'.$owner->id, $client->urls[1]);
+    }
+
     public function test_the_profile_can_be_updated_with_a_status(): void
     {
         $owner = $this->openOffice();
@@ -491,5 +560,22 @@ class OfficeChatTest extends TestCase
         ])->assertCreated();
 
         return User::query()->where('email', 'ada@northwind.test')->firstOrFail();
+    }
+
+    /**
+     * @return array{public: string, auth: string}
+     */
+    private function browserPushKeys(): array
+    {
+        $key = openssl_pkey_new([
+            'curve_name' => 'prime256v1',
+            'private_key_type' => OPENSSL_KEYTYPE_EC,
+        ]);
+        $details = openssl_pkey_get_details($key);
+
+        return [
+            'public' => Base64Url::encode("\x04".$details['ec']['x'].$details['ec']['y']),
+            'auth' => Base64Url::encode(random_bytes(16)),
+        ];
     }
 }

@@ -6,15 +6,26 @@ use App\Models\Channel;
 use App\Models\Message;
 use App\Models\PushSubscription;
 use App\Models\User;
+use GuzzleHttp\Client;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Minishlink\WebPush\Subscription;
 use Minishlink\WebPush\VAPID;
 use Minishlink\WebPush\WebPush;
+use Psr\Http\Client\ClientInterface;
 use Throwable;
 
 class WebPushNotifier
 {
+    private ?ClientInterface $http = null;
+
+    public function useClient(ClientInterface $client): void
+    {
+        $this->http = $client;
+    }
+
     public function publicKey(): ?string
     {
         return $this->keys()['publicKey'] ?? null;
@@ -39,12 +50,6 @@ class WebPushNotifier
             return;
         }
 
-        $keys = $this->keys();
-
-        if ($keys === null) {
-            return;
-        }
-
         $channel->loadMissing('workspace');
         $parentId = $message->parent_id;
         $label = $channel->type === Channel::DM ? 'Direct message' : $channel->name;
@@ -59,10 +64,52 @@ class WebPushNotifier
             'title' => $title,
             'body' => $body,
             'url' => $url,
-            'tag' => 'smack-'.$channel->id.($parentId ? '-thread-'.$parentId : ''),
+            'tag' => 'smack-m-'.$message->id,
             'channel_id' => $channel->id,
             'parent_id' => $parentId,
         ], JSON_UNESCAPED_UNICODE);
+
+        $this->deliver($subscriptions, $payload);
+    }
+
+    /**
+     * @return array{subscriptions: int, sent: int, failed: int}
+     */
+    public function ping(User $user): array
+    {
+        $subscriptions = PushSubscription::query()->where('user_id', $user->id)->get();
+        $payload = json_encode([
+            'title' => 'SmackChat',
+            'body' => 'Alerts are on for this phone.',
+            'url' => '/app',
+            'tag' => 'smack-test-'.$user->id.'-'.now()->timestamp,
+        ], JSON_UNESCAPED_UNICODE);
+
+        return array_merge(
+            ['subscriptions' => $subscriptions->count()],
+            $this->deliver($subscriptions, $payload),
+        );
+    }
+
+    /**
+     * @param  Collection<int, PushSubscription>  $subscriptions
+     * @return array{sent: int, failed: int}
+     */
+    private function deliver(Collection $subscriptions, string $payload): array
+    {
+        $result = ['sent' => 0, 'failed' => 0];
+
+        if ($subscriptions->isEmpty()) {
+            return $result;
+        }
+
+        $keys = $this->keys();
+
+        if ($keys === null) {
+            Log::warning('Push skipped because VAPID keys are missing.');
+
+            return ['sent' => 0, 'failed' => $subscriptions->count()];
+        }
 
         try {
             $webPush = new WebPush([
@@ -71,7 +118,11 @@ class WebPushNotifier
                     'publicKey' => $keys['publicKey'],
                     'privateKey' => $keys['privateKey'],
                 ],
-            ]);
+            ], [], $this->http ?? new Client([
+                'timeout' => 12,
+                'connect_timeout' => 5,
+            ]));
+            $webPush->setAutomaticPadding(0);
             $webPush->setDefaultOptions([
                 'TTL' => 60 * 60 * 12,
                 'urgency' => 'high',
@@ -79,7 +130,7 @@ class WebPushNotifier
         } catch (Throwable $exception) {
             report($exception);
 
-            return;
+            return ['sent' => 0, 'failed' => $subscriptions->count()];
         }
 
         foreach ($subscriptions as $subscription) {
@@ -94,19 +145,36 @@ class WebPushNotifier
                     $payload,
                 );
             } catch (Throwable $exception) {
+                $result['failed']++;
                 report($exception);
             }
         }
 
         try {
             foreach ($webPush->flush() as $report) {
-                if ($report->isSubscriptionExpired()) {
+                if ($report->isSuccess()) {
+                    $result['sent']++;
+
+                    continue;
+                }
+
+                $result['failed']++;
+                $status = $report->getResponse()?->getStatusCode();
+                Log::warning('Push delivery failed.', [
+                    'status' => $status,
+                    'reason' => $report->getReason(),
+                ]);
+
+                if ($report->isSubscriptionExpired() || in_array($status, [401, 403], true)) {
                     PushSubscription::query()->where('endpoint', $report->getEndpoint())->delete();
                 }
             }
         } catch (Throwable $exception) {
             report($exception);
+            $result['failed'] = max($result['failed'], $subscriptions->count());
         }
+
+        return $result;
     }
 
     /**

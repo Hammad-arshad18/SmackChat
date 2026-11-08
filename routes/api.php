@@ -30,6 +30,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/push/key', [PushController::class, 'key']);
     Route::put('/push/subscription', [PushController::class, 'store']);
     Route::delete('/push/subscription', [PushController::class, 'destroy']);
+    Route::post('/push/test', [PushController::class, 'test']);
     Route::get('/attachments/{attachment}', [AttachmentController::class, 'show']);
 
     Route::get('/workspaces', [WorkspaceController::class, 'index']);

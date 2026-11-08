@@ -8,7 +8,7 @@ import WorkspaceNav from '@/components/WorkspaceNav.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
 import { useUiStore } from '@/stores/ui';
-import { ensurePush, isViewingMessage, pushActive } from '@/push';
+import { ensurePush, isViewingMessage, needsHomeScreen, pushActive, pushError, showAlert } from '@/push';
 import { timeAgo } from '@/time';
 
 const route = useRoute();
@@ -82,13 +82,11 @@ onMounted(() => {
     window.addEventListener('keydown', onGlobalKey);
     window.addEventListener('smack-message', onOfficeMessage);
     heartbeat = setInterval(() => api.post('/heartbeat').catch(() => {}), 45000);
-    if (ui.preferences.desktopNotifications || (typeof Notification !== 'undefined' && Notification.permission === 'granted')) {
-        ensurePush().then((ready) => {
-            if (ready) {
-                ui.setPreference('desktopNotifications', true);
-            }
-        });
-    }
+    ensurePush().then((ready) => {
+        if (ready) {
+            ui.setPreference('desktopNotifications', true);
+        }
+    });
 });
 
 watch(() => route.params.slug, (slug, previous) => {
@@ -114,6 +112,8 @@ onBeforeUnmount(() => {
     office.reset();
 });
 
+const alerted = new Set();
+
 function onOfficeMessage(event) {
     const payload = event.detail;
     const message = payload?.message;
@@ -121,36 +121,40 @@ function onOfficeMessage(event) {
         return;
     }
 
+    if (alerted.has(message.id)) {
+        return;
+    }
+
+    alerted.add(message.id);
+    if (alerted.size > 200) {
+        alerted.delete(alerted.values().next().value);
+    }
+
     const viewing = isViewingMessage(message.channel_id, message.parent_id);
+    const phone = needsHomeScreen() || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
     if (ui.preferences.messageSounds && !viewing) {
         chime();
     }
 
-    if (viewing || pushActive.value || !ui.preferences.desktopNotifications) {
+    if (viewing && !phone) {
         return;
     }
 
-    if (!('Notification' in window) || Notification.permission !== 'granted') {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
         return;
     }
 
     const channel = office.channels.find((item) => item.id === message.channel_id);
     const label = channel?.label || office.workspace?.name || 'SmackChat';
     const title = message.parent_id ? `Thread in ${label}` : label;
-    const notice = new Notification(title, {
+    const thread = message.parent_id ? `?m=${message.parent_id}&reply=${message.id}` : `?m=${message.id}`;
+
+    showAlert(title, {
         body: `${message.user?.name || 'Someone'}: ${message.excerpt || 'New message'}`,
-        icon: '/icons/icon-192.png',
-        tag: message.parent_id ? `smack-thread-${message.parent_id}` : `smack-${message.channel_id}`,
+        tag: `smack-m-${message.id}`,
+        data: { url: channel ? `/w/${office.slug}/c/${channel.slug}${thread}` : '/app' },
     });
-    notice.onclick = () => {
-        window.focus();
-        const thread = message.parent_id ? `?m=${message.parent_id}&reply=${message.id}` : `?m=${message.id}`;
-        if (channel) {
-            router.push(`/w/${office.slug}/c/${channel.slug}${thread}`);
-        }
-        notice.close();
-    };
 }
 
 function chime() {
@@ -248,14 +252,47 @@ async function markAllRead() {
     }
 }
 
+const showAlertBanner = computed(() => ready.value && !pushActive.value);
+const alertBannerText = computed(() => pushError.value || 'Turn on alerts so messages reach this phone.');
+
+async function enableAlerts() {
+    if (needsHomeScreen()) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Open the home screen app',
+            detail: 'Add SmackChat to your Home Screen, open that icon, then tap Turn on alerts.',
+            life: 6000,
+        });
+        return;
+    }
+
+    const readyPush = await ensurePush({ prompt: true });
+    if (!readyPush) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Alerts are off',
+            detail: pushError.value || 'Allow notifications for SmackChat.',
+            life: 5000,
+        });
+        return;
+    }
+
+    ui.setPreference('desktopNotifications', true);
+    const { data } = await api.post('/push/test').catch(() => ({ data: { sent: 0, subscriptions: 0 } }));
+    toast.add({
+        severity: data?.sent ? 'success' : 'warn',
+        summary: data?.sent ? 'Test alert sent' : 'Phone not registered',
+        detail: data?.sent
+            ? 'You should see “Alerts are on for this phone.”'
+            : 'Allow notifications again from the installed SmackChat icon.',
+        life: 5000,
+    });
+}
+
 function openNotifications(event) {
     notifications.value.toggle(event);
-    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-        ensurePush({ prompt: true }).then((ready) => {
-            if (ready) {
-                ui.setPreference('desktopNotifications', true);
-            }
-        });
+    if (!pushActive.value) {
+        enableAlerts();
     }
 }
 </script>
@@ -272,6 +309,10 @@ function openNotifications(event) {
         </aside>
 
         <div class="app-main">
+            <button v-if="showAlertBanner" type="button" class="alert-banner" @click="enableAlerts">
+                <i class="pi pi-bell" />
+                <span>{{ alertBannerText }}</span>
+            </button>
             <header class="topbar">
                 <div class="topbar-left">
                     <Button icon="pi pi-bars" text rounded class="mobile-menu" aria-label="Open navigation" @click="navOpen = true" />

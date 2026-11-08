@@ -2,6 +2,21 @@ import api from '@/api';
 import { ref } from 'vue';
 
 export const pushActive = ref(false);
+export const pushError = ref('');
+
+export function isIos() {
+    const agent = navigator.userAgent || '';
+
+    return /iPad|iPhone|iPod/.test(agent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+export function isStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+export function needsHomeScreen() {
+    return isIos() && !isStandalone();
+}
 
 let lastView = { channelId: null, threadId: null };
 let listening = false;
@@ -11,7 +26,13 @@ export function registerWorker() {
         return Promise.resolve(null);
     }
 
-    return navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => null);
+    return navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+        .then((registration) => {
+            registration.update().catch(() => {});
+
+            return registration;
+        })
+        .catch(() => null);
 }
 
 export function reportViewing(channelId, threadId) {
@@ -76,9 +97,67 @@ function urlBase64ToUint8Array(value) {
     return output;
 }
 
+function keysMatch(subscription, publicKey) {
+    const current = subscription.options?.applicationServerKey;
+    if (!current) {
+        return true;
+    }
+
+    const actual = new Uint8Array(current);
+    const expected = urlBase64ToUint8Array(publicKey);
+    if (actual.length !== expected.length) {
+        return false;
+    }
+
+    return actual.every((byte, index) => byte === expected[index]);
+}
+
+export async function showAlert(title, options = {}) {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+        return false;
+    }
+
+    const payload = {
+        body: options.body || '',
+        tag: options.tag || `smack-${Date.now()}`,
+        icon: `${window.location.origin}/icons/icon-192.png`,
+        data: options.data || {},
+    };
+
+    try {
+        const registration = await navigator.serviceWorker?.ready;
+        if (registration?.showNotification) {
+            await registration.showNotification(title, payload);
+            return true;
+        }
+    } catch {
+        /* fall through to the page notification */
+    }
+
+    try {
+        const notice = new Notification(title, payload);
+        notice.onclick = () => {
+            window.focus();
+            notice.close();
+        };
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export async function ensurePush({ prompt = false } = {}) {
+    pushError.value = '';
+
+    if (needsHomeScreen()) {
+        pushActive.value = false;
+        pushError.value = 'Open the SmackChat icon on your Home Screen, then allow alerts there.';
+        return false;
+    }
+
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
         pushActive.value = false;
+        pushError.value = 'This phone cannot receive SmackChat alerts.';
         return false;
     }
 
@@ -89,25 +168,35 @@ export async function ensurePush({ prompt = false } = {}) {
 
     if (permission !== 'granted') {
         pushActive.value = false;
+        pushError.value = permission === 'denied'
+            ? 'Alerts are blocked. Allow notifications for SmackChat in your phone settings.'
+            : '';
         return false;
     }
 
     try {
         const registration = await registerWorker();
         const ready = registration ? await navigator.serviceWorker.ready : null;
-        if (!ready) {
+        if (!ready?.pushManager) {
             pushActive.value = false;
+            pushError.value = 'The alert service did not start. Close SmackChat and open it again.';
             return false;
         }
 
         const { data } = await api.get('/push/key');
         if (!data?.publicKey) {
             pushActive.value = false;
+            pushError.value = 'The server has no alert key yet.';
             return false;
         }
 
         let subscription = await ready.pushManager.getSubscription();
         const applicationServerKey = urlBase64ToUint8Array(data.publicKey);
+
+        if (subscription && !keysMatch(subscription, data.publicKey)) {
+            await subscription.unsubscribe().catch(() => {});
+            subscription = null;
+        }
 
         if (!subscription) {
             subscription = await ready.pushManager.subscribe({
@@ -124,11 +213,16 @@ export async function ensurePush({ prompt = false } = {}) {
             content_encoding: 'aes128gcm',
         });
         pushActive.value = true;
+        pushError.value = '';
         broadcastView();
 
         return true;
-    } catch {
+    } catch (error) {
         pushActive.value = false;
+        pushError.value = error?.response?.data?.message
+            || (error?.name === 'NotAllowedError' ? 'Tap the green bar and allow alerts for SmackChat.' : '')
+            || (error?.name === 'AbortError' ? 'Open SmackChat from its Home Screen icon, then tap this bar again.' : '')
+            || 'This phone could not register for alerts.';
         return false;
     }
 }

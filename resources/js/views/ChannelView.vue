@@ -529,6 +529,16 @@ function onLive(event) {
     absorb(event.detail);
 }
 
+function announceIncoming(message) {
+    if (!message || message.user?.id === auth.user.id) {
+        return;
+    }
+
+    window.dispatchEvent(new CustomEvent('smack-message', {
+        detail: { event: 'message.created', message },
+    }));
+}
+
 function setupTyping() {
     stopTyping();
     const channel = current.value;
@@ -556,6 +566,7 @@ onMounted(async () => {
             const { data } = await endpoint({ after: last.id });
             data.messages.forEach((message) => {
                 upsert(messages, message, { animate: message.user?.id !== auth.user.id });
+                announceIncoming(message);
                 changed = true;
             });
             if (data.messages.length && atBottom.value) {
@@ -570,7 +581,10 @@ onMounted(async () => {
             const lastReply = replies.value.at(-1);
             if (lastReply) params.after = lastReply.id;
             const { data } = await endpoint(params);
-            data.messages.forEach((message) => upsert(replies, message, { animate: message.user?.id !== auth.user.id }));
+            data.messages.forEach((message) => {
+                upsert(replies, message, { animate: message.user?.id !== auth.user.id });
+                announceIncoming(message);
+            });
         }
 
         if (changed) {

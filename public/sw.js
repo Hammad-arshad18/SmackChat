@@ -1,5 +1,5 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v2';
+const CACHE = 'smack-static-v4';
 const PRECACHE = [
     '/offline.html',
     '/favicon.svg',
@@ -13,6 +13,7 @@ self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE)
             .then((cache) => cache.addAll(PRECACHE))
+            .catch(() => undefined)
             .then(() => self.skipWaiting()),
     );
 });
@@ -96,44 +97,38 @@ self.addEventListener('message', (event) => {
     });
 });
 
+function notificationOptions(payload) {
+    return {
+        body: payload.body || 'New message',
+        icon: new URL('/icons/icon-192.png', self.location.origin).href,
+        tag: payload.tag || `smack-${Date.now()}`,
+        data: { url: payload.url || '/app' },
+    };
+}
+
 self.addEventListener('push', (event) => {
     let payload = {};
     try {
         payload = event.data ? event.data.json() : {};
     } catch {
-        payload = { title: 'SmackChat', body: 'New message' };
+        payload = {
+            title: 'SmackChat',
+            body: event.data ? event.data.text() : 'New message',
+        };
     }
 
-    event.waitUntil((async () => {
-        const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-        const alreadyReading = windows.some((client) => {
-            const view = viewing.get(client.id);
-            if (!view?.focused || !client.focused) {
-                return false;
-            }
-            if (Number(view.channelId) !== Number(payload.channel_id)) {
-                return false;
-            }
-            if (payload.parent_id) {
-                return Number(view.threadId) === Number(payload.parent_id);
-            }
+    const title = payload.title || 'SmackChat';
+    const options = notificationOptions(payload);
 
-            return true;
-        });
-
-        if (alreadyReading) {
-            return;
-        }
-
-        await self.registration.showNotification(payload.title || 'SmackChat', {
-            body: payload.body || 'New message',
-            icon: '/icons/icon-192.png',
-            badge: '/icons/icon-192.png',
-            tag: payload.tag || 'smack',
-            renotify: true,
-            data: { url: payload.url || '/app' },
-        });
-    })());
+    // iPhone throws if it sees unsupported options such as renotify, and it
+    // drops the subscription when a push does not display a notification.
+    event.waitUntil(
+        self.registration.showNotification(title, options).catch(() => self.registration.showNotification(title, {
+            body: options.body,
+            tag: options.tag,
+            data: options.data,
+        })),
+    );
 });
 
 self.addEventListener('notificationclick', (event) => {
