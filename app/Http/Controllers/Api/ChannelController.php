@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\User;
-use App\Models\WorkspaceMember;
 use App\Services\ChannelAccess;
 use App\Services\MessageCipher;
 use App\Support\RichText;
@@ -34,7 +33,6 @@ class ChannelController extends ApiController
         $latestIds = Message::query()
             ->retained($workspace)
             ->whereIn('channel_id', $ids)
-            ->whereNull('parent_id')
             ->whereNull('deleted_at')
             ->selectRaw('max(id) as id')
             ->groupBy('channel_id')
@@ -60,7 +58,6 @@ class ChannelController extends ApiController
             $unreadQuery = Message::query()
                 ->retained($workspace)
                 ->where('channel_id', $channel->id)
-                ->whereNull('parent_id')
                 ->whereNull('deleted_at')
                 ->where('user_id', '!=', $user->id);
 

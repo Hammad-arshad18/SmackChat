@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import api, { ensureCsrf } from '@/api';
+import { disablePush } from '@/push';
 
 export const useAuthStore = defineStore('auth', {
     state: () => ({
@@ -50,6 +51,7 @@ export const useAuthStore = defineStore('auth', {
             return data.user;
         },
         async logout() {
+            await disablePush().catch(() => {});
             await api.post('/logout');
             this.user = null;
         },

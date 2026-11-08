@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
 import api, { errorText } from '@/api';
+import { disablePush, ensurePush } from '@/push';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
 import { useUiStore } from '@/stores/ui';
@@ -80,19 +81,25 @@ async function applyStatus(preset) {
 async function setNotifications(enabled) {
     if (!enabled) {
         ui.setPreference('desktopNotifications', false);
+        await disablePush();
         return;
     }
 
-    if (!('Notification' in window)) {
-        toast.add({ severity: 'warn', summary: 'Not supported', detail: 'This browser cannot show desktop notifications.', life: 3000 });
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+        toast.add({ severity: 'warn', summary: 'Not supported', detail: 'This browser cannot show notifications.', life: 3000 });
         return;
     }
 
-    const permission = await Notification.requestPermission();
-    ui.setPreference('desktopNotifications', permission === 'granted');
+    const ready = await ensurePush({ prompt: true });
+    ui.setPreference('desktopNotifications', ready);
 
-    if (permission !== 'granted') {
-        toast.add({ severity: 'warn', summary: 'Permission not granted', detail: 'Allow notifications in your browser to turn this on.', life: 3200 });
+    if (!ready) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Notifications are off',
+            detail: 'Allow notifications for SmackChat. Installed apps also need that permission to alert you in the background.',
+            life: 4200,
+        });
     }
 }
 
@@ -235,7 +242,7 @@ function leaveWorkspace() {
                 </div>
 
                 <div class="switch-row">
-                    <div><strong>Desktop notifications</strong><small>Show a system alert when you are away from the tab.</small></div>
+                    <div><strong>Notifications</strong><small>Alert you for new messages and thread replies, including when SmackChat is closed.</small></div>
                     <ToggleSwitch :model-value="ui.preferences.desktopNotifications" @update:model-value="setNotifications" />
                 </div>
             </section>

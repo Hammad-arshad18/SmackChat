@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Support\RichText;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class MessageWriter
 {
@@ -83,6 +84,17 @@ class MessageWriter
         ];
 
         $this->ably->publish($channel->workspace_id, $channel->id, $payload);
+
+        try {
+            app(WebPushNotifier::class)->notify(
+                $channel,
+                $author,
+                $message,
+                (string) ($payload['message']['excerpt'] ?? ''),
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+        }
 
         return $payload;
     }

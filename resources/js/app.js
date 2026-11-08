@@ -57,6 +57,7 @@ import Toolbar from 'primevue/toolbar';
 import 'primeicons/primeicons.css';
 
 import App from './App.vue';
+import { registerWorker } from './push';
 import router from './router';
 import { SmackPreset } from './theme';
 import { useUiStore } from './stores/ui';
@@ -146,10 +147,14 @@ scheme?.addEventListener?.('change', () => {
 
 app.mount('#app');
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
-            // Installability is optional — never block the app if SW registration fails.
-        });
+        registerWorker();
+    });
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'navigate' && event.data.url) {
+            const url = new URL(event.data.url, window.location.origin);
+            router.push(url.pathname + url.search + url.hash).catch(() => {});
+        }
     });
 }

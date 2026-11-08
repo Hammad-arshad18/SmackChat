@@ -7,6 +7,7 @@ import api, { errorText } from '@/api';
 import Composer from '@/components/Composer.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import MessageBody from '@/components/MessageBody.vue';
+import { reportViewing } from '@/push';
 import { publishTyping, watchTyping, whenRealtime } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
@@ -75,7 +76,19 @@ const channelMembers = computed(() => {
     return office.members.filter((person) => ids.has(person.id));
 });
 const canManageMembers = computed(() => current.value?.type === 'private' || (current.value?.type === 'attendance' && office.manages));
-const composerKey = computed(() => (editing.value ? `edit-${editing.value.id}` : `channel-${props.channel}`));
+const composerKey = computed(() => {
+    if (editing.value) return `edit-${editing.value.id}`;
+    if (thread.value) return `reply-${thread.value.id}`;
+    return `channel-${props.channel}`;
+});
+const composerPlaceholder = computed(() => (
+    thread.value && !editing.value ? 'Reply in thread…' : `Message ${current.value?.label || ''}`
+));
+const composerSubmit = computed(() => {
+    if (editing.value) return 'Save changes';
+    if (thread.value) return 'Reply';
+    return 'Send';
+});
 
 watch(current, (channel) => {
     channelForm.topic = channel?.topic || '';
@@ -95,6 +108,10 @@ watch(() => [route.query.m, route.query.reply], () => {
     if (route.query.m) {
         focusFromQuery();
     }
+});
+
+watch([() => current.value?.id, thread], () => {
+    reportViewing(current.value?.id ?? null, thread.value?.id ?? null);
 });
 
 watch(searchQuery, (value) => {
@@ -273,6 +290,11 @@ function absorb(payload) {
 }
 
 async function send(payload) {
+    if (thread.value && !editing.value) {
+        await sendReply(payload);
+        return;
+    }
+
     const document = payload?.document || payload;
     const attachmentIds = payload?.attachment_ids || [];
 
@@ -313,6 +335,7 @@ async function sendReply(payload) {
 }
 
 async function openThread(message) {
+    editing.value = null;
     thread.value = message;
     replies.value = [];
     try {
@@ -320,6 +343,9 @@ async function openThread(message) {
         replies.value = data.messages;
         await nextTick();
         if (threadScroller.value) threadScroller.value.scrollTop = threadScroller.value.scrollHeight;
+        composerRef.value?.focus();
+        api.post(`/workspaces/${office.slug}/channels/${props.channel}/read`).catch(() => {});
+        clearUnread();
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Thread', detail: errorText(error), life: 3000 });
     }
@@ -377,8 +403,9 @@ async function copyMessage(message) {
 }
 
 function startEdit(message) {
+    thread.value = null;
     editing.value = message;
-    composerRef.value?.focus();
+    nextTick(() => composerRef.value?.focus());
 }
 
 function stacked(message, index, list) {
@@ -553,6 +580,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+    reportViewing(null, null);
     clearInterval(poll);
     clearTimeout(typingTimer);
     clearTimeout(searchTimer);
@@ -883,19 +911,6 @@ onBeforeUnmount(() => {
                         </div>
                     </article>
                 </div>
-
-                <div class="thread-composer">
-                    <Composer
-                        :key="`reply-${thread.id}`"
-                        placeholder="Reply in thread…"
-                        :members="mentionPeople"
-                        :channel="props.channel"
-                        submit-label="Reply"
-                        :draft-key="`reply-${office.slug}-${thread.id}`"
-                        compact
-                        @send="sendReply"
-                    />
-                </div>
             </aside>
         </div>
 
@@ -909,16 +924,21 @@ onBeforeUnmount(() => {
                 <span>Editing a message</span>
                 <Button label="Cancel" link size="small" @click="editing = null" />
             </div>
+            <div v-else-if="thread" class="editing-line">
+                <i class="pi pi-comments" />
+                <span>Replying in thread</span>
+                <Button label="Cancel" link size="small" @click="thread = null" />
+            </div>
             <Composer
                 ref="composerRef"
                 :key="composerKey"
-                :placeholder="`Message ${current?.label || ''}`"
+                :placeholder="composerPlaceholder"
                 :members="mentionPeople"
                 :channel="props.channel"
                 :initial="editing?.document || null"
                 :allow-attachments="!editing"
-                :submit-label="editing ? 'Save changes' : 'Send'"
-                :draft-key="editing ? '' : `channel-${office.slug}-${props.channel}`"
+                :submit-label="composerSubmit"
+                :draft-key="editing ? '' : thread ? `reply-${office.slug}-${thread.id}` : `channel-${office.slug}-${props.channel}`"
                 @send="send"
                 @typing="current && publishTyping(office.workspace.id, current.id, { user_id: auth.user.id, name: auth.user.name })"
             />

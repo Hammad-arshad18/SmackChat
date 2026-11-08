@@ -8,6 +8,7 @@ import WorkspaceNav from '@/components/WorkspaceNav.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
 import { useUiStore } from '@/stores/ui';
+import { ensurePush, isViewingMessage, pushActive } from '@/push';
 import { timeAgo } from '@/time';
 
 const route = useRoute();
@@ -81,6 +82,13 @@ onMounted(() => {
     window.addEventListener('keydown', onGlobalKey);
     window.addEventListener('smack-message', onOfficeMessage);
     heartbeat = setInterval(() => api.post('/heartbeat').catch(() => {}), 45000);
+    if (ui.preferences.desktopNotifications || (typeof Notification !== 'undefined' && Notification.permission === 'granted')) {
+        ensurePush().then((ready) => {
+            if (ready) {
+                ui.setPreference('desktopNotifications', true);
+            }
+        });
+    }
 });
 
 watch(() => route.params.slug, (slug, previous) => {
@@ -113,23 +121,36 @@ function onOfficeMessage(event) {
         return;
     }
 
-    if (ui.preferences.messageSounds) {
+    const viewing = isViewingMessage(message.channel_id, message.parent_id);
+
+    if (ui.preferences.messageSounds && !viewing) {
         chime();
     }
 
-    if (
-        ui.preferences.desktopNotifications
-        && document.hidden
-        && 'Notification' in window
-        && Notification.permission === 'granted'
-    ) {
-        const channel = office.channels.find((item) => item.id === message.channel_id);
-        new Notification(channel?.label || office.workspace?.name || 'SmackChat', {
-            body: `${message.user?.name || 'Someone'}: ${message.excerpt || 'New message'}`,
-            icon: '/icons/icon-192.png',
-            tag: `smack-${message.channel_id}`,
-        });
+    if (viewing || pushActive.value || !ui.preferences.desktopNotifications) {
+        return;
     }
+
+    if (!('Notification' in window) || Notification.permission !== 'granted') {
+        return;
+    }
+
+    const channel = office.channels.find((item) => item.id === message.channel_id);
+    const label = channel?.label || office.workspace?.name || 'SmackChat';
+    const title = message.parent_id ? `Thread in ${label}` : label;
+    const notice = new Notification(title, {
+        body: `${message.user?.name || 'Someone'}: ${message.excerpt || 'New message'}`,
+        icon: '/icons/icon-192.png',
+        tag: message.parent_id ? `smack-thread-${message.parent_id}` : `smack-${message.channel_id}`,
+    });
+    notice.onclick = () => {
+        window.focus();
+        const thread = message.parent_id ? `?m=${message.parent_id}&reply=${message.id}` : `?m=${message.id}`;
+        if (channel) {
+            router.push(`/w/${office.slug}/c/${channel.slug}${thread}`);
+        }
+        notice.close();
+    };
 }
 
 function chime() {
@@ -229,6 +250,13 @@ async function markAllRead() {
 
 function openNotifications(event) {
     notifications.value.toggle(event);
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+        ensurePush({ prompt: true }).then((ready) => {
+            if (ready) {
+                ui.setPreference('desktopNotifications', true);
+            }
+        });
+    }
 }
 </script>
 
@@ -268,15 +296,16 @@ function openNotifications(event) {
                         <em v-if="office.today?.work_label && shiftState === 'completed'">{{ office.today.work_label }}</em>
                     </RouterLink>
 
-                    <OverlayBadge v-if="office.totalUnread" :value="office.totalUnread" severity="danger">
-                        <Button icon="pi pi-bell" text rounded aria-label="Notifications" @click="openNotifications" />
+                    <OverlayBadge v-if="office.totalUnread" :value="office.totalUnread" severity="danger" class="notify-badge">
+                        <Button icon="pi pi-bell" text rounded class="notify-btn" aria-label="Notifications" @click="openNotifications" />
                     </OverlayBadge>
-                    <Button v-else icon="pi pi-bell" text rounded aria-label="Notifications" @click="openNotifications" />
+                    <Button v-else icon="pi pi-bell" text rounded class="notify-btn" aria-label="Notifications" @click="openNotifications" />
 
                     <Button
                         :icon="ui.isDark ? 'pi pi-sun' : 'pi pi-moon'"
                         text
                         rounded
+                        class="theme-toggle"
                         aria-label="Toggle theme"
                         @click="ui.toggleTheme()"
                     />

@@ -1,5 +1,5 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v1';
+const CACHE = 'smack-static-v2';
 const PRECACHE = [
     '/offline.html',
     '/favicon.svg',
@@ -79,4 +79,83 @@ self.addEventListener('fetch', (event) => {
             return response;
         }),
     );
+});
+
+const viewing = new Map();
+
+self.addEventListener('message', (event) => {
+    const data = event.data || {};
+    if (data.type !== 'viewing' || !event.source) {
+        return;
+    }
+
+    viewing.set(event.source.id, {
+        channelId: data.channelId ? Number(data.channelId) : null,
+        threadId: data.threadId ? Number(data.threadId) : null,
+        focused: Boolean(data.focused),
+    });
+});
+
+self.addEventListener('push', (event) => {
+    let payload = {};
+    try {
+        payload = event.data ? event.data.json() : {};
+    } catch {
+        payload = { title: 'SmackChat', body: 'New message' };
+    }
+
+    event.waitUntil((async () => {
+        const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        const alreadyReading = windows.some((client) => {
+            const view = viewing.get(client.id);
+            if (!view?.focused || !client.focused) {
+                return false;
+            }
+            if (Number(view.channelId) !== Number(payload.channel_id)) {
+                return false;
+            }
+            if (payload.parent_id) {
+                return Number(view.threadId) === Number(payload.parent_id);
+            }
+
+            return true;
+        });
+
+        if (alreadyReading) {
+            return;
+        }
+
+        await self.registration.showNotification(payload.title || 'SmackChat', {
+            body: payload.body || 'New message',
+            icon: '/icons/icon-192.png',
+            badge: '/icons/icon-192.png',
+            tag: payload.tag || 'smack',
+            renotify: true,
+            data: { url: payload.url || '/app' },
+        });
+    })());
+});
+
+self.addEventListener('notificationclick', (event) => {
+    event.notification.close();
+    const path = event.notification.data?.url || '/app';
+    const target = new URL(path, self.location.origin).href;
+
+    event.waitUntil((async () => {
+        const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (const client of windows) {
+            client.postMessage({ type: 'navigate', url: path });
+            if ('navigate' in client) {
+                try {
+                    await client.navigate(target);
+                } catch {
+                    /* the page handles the navigate message */
+                }
+            }
+
+            return client.focus();
+        }
+
+        await self.clients.openWindow(target);
+    })());
 });

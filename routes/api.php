@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\ChannelController;
 use App\Http\Controllers\Api\InvitationController;
 use App\Http\Controllers\Api\MemberController;
 use App\Http\Controllers\Api\MessageController;
+use App\Http\Controllers\Api\PushController;
 use App\Http\Controllers\Api\RealtimeController;
 use App\Http\Controllers\Api\ScheduleController;
 use App\Http\Controllers\Api\WorkspaceController;
@@ -26,6 +27,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/me', [AuthController::class, 'updateProfile']);
     Route::post('/heartbeat', [AuthController::class, 'heartbeat']);
     Route::get('/realtime/token', [RealtimeController::class, 'token']);
+    Route::get('/push/key', [PushController::class, 'key']);
+    Route::put('/push/subscription', [PushController::class, 'store']);
+    Route::delete('/push/subscription', [PushController::class, 'destroy']);
     Route::get('/attachments/{attachment}', [AttachmentController::class, 'show']);
 
     Route::get('/workspaces', [WorkspaceController::class, 'index']);

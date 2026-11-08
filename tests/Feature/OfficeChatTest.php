@@ -7,6 +7,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\WorkspaceProvisioner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
@@ -67,7 +68,7 @@ class OfficeChatTest extends TestCase
 
         $upload = $this->actingAs($owner, 'sanctum')
             ->post("/api/workspaces/{$workspace->slug}/channels/general/attachments", [
-                'file' => \Illuminate\Http\UploadedFile::fake()->image('screenshot.png', 1200, 800),
+                'file' => UploadedFile::fake()->image('screenshot.png', 1200, 800),
             ], ['Accept' => 'application/json'])
             ->assertCreated()
             ->json('attachment');
@@ -373,6 +374,77 @@ class OfficeChatTest extends TestCase
             ->getJson("/api/workspaces/{$workspace->slug}/attendance/floor")
             ->assertOk()
             ->assertJsonCount(0, 'rows');
+
+        Carbon::setTestNow();
+    }
+
+    public function test_thread_replies_count_as_unread_and_push_subscriptions_can_be_saved(): void
+    {
+        $owner = $this->openOffice();
+        $worker = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
+
+        $parent = $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
+            'document' => [
+                'type' => 'doc',
+                'content' => [[
+                    'type' => 'paragraph',
+                    'content' => [['type' => 'text', 'text' => 'The laptop will not boot.']],
+                ]],
+            ],
+        ])->assertCreated()->json('message.id');
+
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/channels/general/read")
+            ->assertOk();
+
+        Carbon::setTestNow(now()->addMinute());
+
+        $this->actingAs($worker, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
+            'parent_id' => $parent,
+            'document' => [
+                'type' => 'doc',
+                'content' => [[
+                    'type' => 'paragraph',
+                    'content' => [['type' => 'text', 'text' => 'The UI of this app is totally broken.']],
+                ]],
+            ],
+        ])->assertCreated();
+
+        $general = collect($this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/channels")
+            ->assertOk()
+            ->json('channels'))
+            ->firstWhere('slug', 'general');
+
+        $this->assertSame(1, $general['unread']);
+        $this->assertStringContainsString('totally broken', $general['excerpt']);
+
+        $this->actingAs($owner, 'sanctum')
+            ->getJson('/api/push/key')
+            ->assertOk()
+            ->assertJsonPath('enabled', true);
+
+        $this->actingAs($owner, 'sanctum')->putJson('/api/push/subscription', [
+            'endpoint' => 'https://push.example.test/subscription/1',
+            'public_key' => str_repeat('A', 87),
+            'auth_token' => str_repeat('B', 22),
+            'content_encoding' => 'aes128gcm',
+        ])->assertOk();
+
+        $this->assertDatabaseHas('push_subscriptions', [
+            'user_id' => $owner->id,
+            'endpoint' => 'https://push.example.test/subscription/1',
+        ]);
+
+        $this->actingAs($owner, 'sanctum')->deleteJson('/api/push/subscription', [
+            'endpoint' => 'https://push.example.test/subscription/1',
+        ])->assertOk();
+
+        $this->assertDatabaseMissing('push_subscriptions', [
+            'endpoint' => 'https://push.example.test/subscription/1',
+        ]);
 
         Carbon::setTestNow();
     }
