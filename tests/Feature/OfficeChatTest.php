@@ -456,6 +456,51 @@ class OfficeChatTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_a_notification_target_opens_the_message_and_its_thread(): void
+    {
+        $owner = $this->openOffice();
+        $worker = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
+
+        $parent = $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
+            'document' => [
+                'type' => 'doc',
+                'content' => [[
+                    'type' => 'paragraph',
+                    'content' => [['type' => 'text', 'text' => 'Please look at the lobby.']],
+                ]],
+            ],
+        ])->assertCreated()->json('message.id');
+
+        $reply = $this->actingAs($worker, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
+            'parent_id' => $parent,
+            'document' => [
+                'type' => 'doc',
+                'content' => [[
+                    'type' => 'paragraph',
+                    'content' => [['type' => 'text', 'text' => 'On my way.']],
+                ]],
+            ],
+        ])->assertCreated()->json('message.id');
+
+        $focused = $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/channels/general/messages?focus={$reply}")
+            ->assertOk()
+            ->json();
+
+        $this->assertSame($parent, $focused['focus_id']);
+        $this->assertTrue(collect($focused['messages'])->pluck('id')->contains($parent));
+
+        $channel = collect($this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/channels")
+            ->assertOk()
+            ->json('channels'))
+            ->firstWhere('slug', 'general');
+
+        $this->assertSame(0, $channel['unread']);
+    }
+
     public function test_a_message_is_pushed_to_everyone_except_the_author(): void
     {
         $owner = $this->openOffice();

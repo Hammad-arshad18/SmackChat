@@ -8,7 +8,7 @@ import Composer from '@/components/Composer.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import MessageBody from '@/components/MessageBody.vue';
 import { reportViewing } from '@/push';
-import { publishTyping, watchTyping, whenRealtime } from '@/realtime';
+import { publishTyping, realtimeConnected, watchTyping, whenRealtime } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
 import { formatClock, formatDay, sameDay, timeAgo } from '@/time';
@@ -48,6 +48,7 @@ const channelForm = reactive({ topic: '', description: '' });
 const arriving = ref(new Set());
 const emojis = ['👍', '❤️', '😄', '🎉', '✅', '👀', '🚀', '🔥'];
 let poll;
+let polling = true;
 let stopTyping = () => {};
 let typingTimer;
 let searchTimer;
@@ -104,10 +105,13 @@ watch(() => props.channel, async () => {
     await load();
 });
 
-watch(() => [route.query.m, route.query.reply], () => {
-    if (route.query.m) {
-        focusFromQuery();
+watch(() => [route.query.m, route.query.reply, props.channel], async (value, previous) => {
+    const channelChanged = !previous || value[2] !== previous[2];
+    if (channelChanged || loading.value || !route.query.m) {
+        return;
     }
+
+    await focusFromQuery();
 });
 
 watch([() => current.value?.id, thread], () => {
@@ -154,22 +158,32 @@ function endpoint(params = {}) {
 async function load() {
     loading.value = true;
     thread.value = null;
-    const { data } = await endpoint();
+    const params = route.query.m ? { focus: Number(route.query.m) } : {};
+    const { data } = await endpoint(params);
     messages.value = data.messages;
     hasMore.value = data.has_more;
     loading.value = false;
     clearUnread();
-    await stick();
-    setupTyping();
 
     if (route.query.m) {
         await focusFromQuery();
+    } else {
+        await stick();
     }
+
+    setupTyping();
 }
 
 async function focusFromQuery() {
     const parentId = Number(route.query.m);
-    const parent = messages.value.find((message) => message.id === parentId);
+    let parent = messages.value.find((message) => message.id === parentId);
+
+    if (!parent && parentId) {
+        const { data } = await endpoint({ focus: parentId });
+        messages.value = data.messages;
+        hasMore.value = data.has_more;
+        parent = messages.value.find((message) => message.id === parentId);
+    }
 
     if (!parent) {
         return false;
@@ -499,26 +513,20 @@ async function highlightMessage(id) {
 
 async function goToResult(result) {
     searchOpen.value = false;
+    const query = result.message.parent_id
+        ? { m: String(result.message.parent_id), reply: String(result.message.id) }
+        : { m: String(result.message.id) };
+    const path = `/w/${office.slug}/c/${result.channel?.slug || props.channel}`;
+    const dest = `${path}?${new URLSearchParams(query).toString()}`;
 
-    if (result.message.parent_id) {
-        const parent = messages.value.find((message) => message.id === result.message.parent_id);
-        if (parent) {
-            await openThread(parent);
-            await highlightMessage(result.message.id);
-            return;
-        }
+    if (route.fullPath === dest) {
+        await focusFromQuery();
+        return;
     }
 
-    const found = await highlightMessage(result.message.id);
-
-    if (!found) {
-        toast.add({
-            severity: 'info',
-            summary: 'Older message',
-            detail: 'Load earlier messages to jump to that result in the transcript.',
-            life: 3200,
-        });
-    }
+    await (result.channel?.slug && result.channel.slug !== props.channel
+        ? router.push({ path, query })
+        : router.replace({ path, query }));
 }
 
 function prompt(text) {
@@ -555,47 +563,69 @@ function setupTyping() {
     });
 }
 
+async function pullNew() {
+    const last = messages.value.at(-1);
+    let changed = false;
+
+    if (last) {
+        const { data } = await endpoint({ after: last.id });
+        data.messages.forEach((message) => {
+            upsert(messages, message, { animate: message.user?.id !== auth.user.id });
+            announceIncoming(message);
+            changed = true;
+        });
+        if (data.messages.length && atBottom.value) {
+            stick();
+            clearUnread();
+            api.post(`/workspaces/${office.slug}/channels/${props.channel}/read`).catch(() => {});
+        }
+    }
+
+    if (thread.value) {
+        const params = { parent_id: thread.value.id };
+        const lastReply = replies.value.at(-1);
+        if (lastReply) params.after = lastReply.id;
+        const { data } = await endpoint(params);
+        data.messages.forEach((message) => {
+            upsert(replies, message, { animate: message.user?.id !== auth.user.id });
+            announceIncoming(message);
+        });
+    }
+
+    if (changed) {
+        office.scheduleRefresh();
+    }
+}
+
+function schedulePoll() {
+    if (!polling) {
+        return;
+    }
+
+    const wait = realtimeConnected() ? 20000 : 8000;
+    poll = setTimeout(async () => {
+        if (!polling) {
+            return;
+        }
+        try {
+            await pullNew();
+        } catch {
+            /* the next pass retries */
+        }
+        schedulePoll();
+    }, wait);
+}
+
 onMounted(async () => {
     await load();
     window.addEventListener('smack-message', onLive);
-    poll = setInterval(async () => {
-        const last = messages.value.at(-1);
-        let changed = false;
-
-        if (last) {
-            const { data } = await endpoint({ after: last.id });
-            data.messages.forEach((message) => {
-                upsert(messages, message, { animate: message.user?.id !== auth.user.id });
-                announceIncoming(message);
-                changed = true;
-            });
-            if (data.messages.length && atBottom.value) {
-                stick();
-                clearUnread();
-                api.post(`/workspaces/${office.slug}/channels/${props.channel}/read`).catch(() => {});
-            }
-        }
-
-        if (thread.value) {
-            const params = { parent_id: thread.value.id };
-            const lastReply = replies.value.at(-1);
-            if (lastReply) params.after = lastReply.id;
-            const { data } = await endpoint(params);
-            data.messages.forEach((message) => {
-                upsert(replies, message, { animate: message.user?.id !== auth.user.id });
-                announceIncoming(message);
-            });
-        }
-
-        if (changed) {
-            office.refreshChannels();
-        }
-    }, 8000);
+    whenRealtime().finally(schedulePoll);
 });
 
 onBeforeUnmount(() => {
     reportViewing(null, null);
-    clearInterval(poll);
+    polling = false;
+    clearTimeout(poll);
     clearTimeout(typingTimer);
     clearTimeout(searchTimer);
     clearTimeout(focusTimer);

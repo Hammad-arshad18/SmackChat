@@ -138,6 +138,9 @@ export async function showAlert(title, options = {}) {
         const notice = new Notification(title, payload);
         notice.onclick = () => {
             window.focus();
+            if (payload.data?.url) {
+                window.dispatchEvent(new CustomEvent('smack-open', { detail: { url: payload.data.url } }));
+            }
             notice.close();
         };
         return true;

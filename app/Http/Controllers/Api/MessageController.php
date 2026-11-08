@@ -24,12 +24,36 @@ class MessageController extends ApiController
             'parent_id' => ['nullable', 'integer'],
             'before' => ['nullable', 'integer'],
             'after' => ['nullable', 'integer'],
+            'focus' => ['nullable', 'integer'],
         ]);
 
         $query = Message::query()
             ->with(['user', 'reactions', 'attachments'])
             ->where('channel_id', $model->id)
             ->retained($workspaceModel);
+
+        if (! empty($data['focus']) && empty($data['parent_id']) && empty($data['before']) && empty($data['after'])) {
+            $target = (clone $query)->whereKey($data['focus'])->first();
+
+            if ($target) {
+                $anchorId = $target->parent_id ?: $target->id;
+                $roots = (clone $query)->whereNull('parent_id');
+                $older = (clone $roots)->where('id', '<', $anchorId)->orderByDesc('id')->limit(20)->get()->reverse()->values();
+                $anchor = (clone $roots)->whereKey($anchorId)->first();
+                $newer = (clone $roots)->where('id', '>', $anchorId)->orderBy('id')->limit(80)->get();
+                $rows = $older->concat($anchor ? collect([$anchor]) : collect())->concat($newer)->values();
+                $firstId = $rows->first()?->id;
+                $model->members()->updateExistingPivot($request->user()->id, ['last_read_at' => now()]);
+
+                return response()->json([
+                    'messages' => $rows->map(fn (Message $message) => $presenter->present($message, $request->user()))->values(),
+                    'has_more' => $firstId
+                        ? (clone $roots)->where('id', '<', $firstId)->exists()
+                        : false,
+                    'focus_id' => $anchorId,
+                ]);
+            }
+        }
 
         if (! empty($data['parent_id'])) {
             $parent = Message::query()
@@ -106,7 +130,7 @@ class MessageController extends ApiController
             ->whereNull('deleted_at')
             ->retained($workspace)
             ->orderByDesc('id')
-            ->limit(800)
+            ->limit(250)
             ->get();
 
         $results = [];
@@ -213,7 +237,7 @@ class MessageController extends ApiController
         }
 
         $message->load(['user', 'reactions', 'attachments']);
-        $presenter = app(\App\Services\MessagePresenter::class);
+        $presenter = app(MessagePresenter::class);
 
         return response()->json([
             'message' => $presenter->present($message, $request->user()),

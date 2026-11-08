@@ -2,6 +2,15 @@ import { defineStore } from 'pinia';
 import api from '@/api';
 import { bindOffice, stopRealtime } from '@/realtime';
 
+let channelRefreshTimer = null;
+
+function queueChannelRefresh(store) {
+    clearTimeout(channelRefreshTimer);
+    channelRefreshTimer = setTimeout(() => {
+        store.refreshChannels();
+    }, 1500);
+}
+
 export const useOfficeStore = defineStore('office', {
     state: () => ({
         workspace: null,
@@ -50,7 +59,18 @@ export const useOfficeStore = defineStore('office', {
         },
         ingest(payload) {
             window.dispatchEvent(new CustomEvent('smack-message', { detail: payload }));
-            this.refreshChannels();
+            const message = payload?.message;
+            const channel = this.channels.find((item) => item.id === message?.channel_id);
+
+            if (channel && message) {
+                channel.excerpt = message.excerpt || channel.excerpt;
+                channel.last_at = message.created_at || channel.last_at;
+            }
+
+            queueChannelRefresh(this);
+        },
+        scheduleRefresh() {
+            queueChannelRefresh(this);
         },
         async refreshChannels() {
             if (!this.slug) {

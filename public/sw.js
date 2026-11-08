@@ -1,5 +1,5 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v4';
+const CACHE = 'smack-static-v5';
 const PRECACHE = [
     '/offline.html',
     '/favicon.svg',
@@ -138,19 +138,21 @@ self.addEventListener('notificationclick', (event) => {
 
     event.waitUntil((async () => {
         const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-        for (const client of windows) {
-            client.postMessage({ type: 'navigate', url: path });
-            if ('navigate' in client) {
-                try {
-                    await client.navigate(target);
-                } catch {
-                    /* the page handles the navigate message */
-                }
+        const open = windows.filter((client) => {
+            try {
+                return new URL(client.url).origin === self.location.origin;
+            } catch {
+                return false;
             }
+        });
+        const client = open.find((item) => item.visibilityState === 'visible') || open[0];
 
-            return client.focus();
+        if (!client) {
+            await self.clients.openWindow(target);
+            return;
         }
 
-        await self.clients.openWindow(target);
+        client.postMessage({ type: 'navigate', url: path });
+        await client.focus();
     })());
 });

@@ -147,14 +147,31 @@ scheme?.addEventListener?.('change', () => {
 
 app.mount('#app');
 
+function openFromNotification(target) {
+    const url = new URL(target, window.location.origin);
+    const dest = `${url.pathname}${url.search}${url.hash}`;
+
+    if (router.currentRoute.value.fullPath === dest) {
+        router.replace(dest).catch(() => {});
+        return;
+    }
+
+    router.push(dest).catch(() => {});
+}
+
+window.addEventListener('smack-open', (event) => {
+    if (event.detail?.url) {
+        openFromNotification(event.detail.url);
+    }
+});
+
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         registerWorker();
     });
     navigator.serviceWorker.addEventListener('message', (event) => {
         if (event.data?.type === 'navigate' && event.data.url) {
-            const url = new URL(event.data.url, window.location.origin);
-            router.push(url.pathname + url.search + url.hash).catch(() => {});
+            openFromNotification(event.data.url);
         }
     });
 }

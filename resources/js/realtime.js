@@ -9,6 +9,10 @@ export function whenRealtime() {
     return ready;
 }
 
+export function realtimeConnected() {
+    return client !== null;
+}
+
 export function bindOffice(workspaceId, channels, onMessage) {
     stopRealtime();
 

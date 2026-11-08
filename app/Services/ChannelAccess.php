@@ -49,8 +49,6 @@ class ChannelAccess
 
     public function addMember(Channel $channel, User $user): void
     {
-        $channel->members()->syncWithoutDetaching([
-            $user->id => ['last_read_at' => now()],
-        ]);
+        $channel->members()->syncWithoutDetaching([$user->id]);
     }
 }

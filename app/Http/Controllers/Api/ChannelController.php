@@ -39,30 +39,32 @@ class ChannelController extends ApiController
             ->pluck('id');
 
         $latest = Message::query()->with('user')->whereIn('id', $latestIds)->get()->keyBy('channel_id');
-        $reads = DB::table('channel_user')
-            ->where('user_id', $user->id)
-            ->whereIn('channel_id', $ids)
+        $unreadCounts = Message::query()
+            ->retained($workspace)
+            ->whereIn('messages.channel_id', $ids)
+            ->whereNull('messages.deleted_at')
+            ->where('messages.user_id', '!=', $user->id)
+            ->leftJoin('channel_user as reads', function ($join) use ($user) {
+                $join->on('reads.channel_id', '=', 'messages.channel_id')
+                    ->where('reads.user_id', '=', $user->id);
+            })
+            ->where(function ($query) {
+                $query->whereNull('reads.last_read_at')
+                    ->orWhereColumn('messages.created_at', '>', 'reads.last_read_at');
+            })
+            ->groupBy('messages.channel_id')
+            ->select('messages.channel_id')
+            ->selectRaw('count(*) as unread_count')
             ->get()
-            ->keyBy('channel_id');
+            ->mapWithKeys(fn ($row) => [(int) $row->channel_id => (int) $row->unread_count]);
 
-        $payload = $channels->map(function (Channel $channel) use ($user, $latest, $reads, $cipher, $workspace) {
+        $payload = $channels->map(function (Channel $channel) use ($user, $latest, $unreadCounts, $cipher) {
             $message = $latest->get($channel->id);
             $excerpt = null;
 
             if ($message) {
                 $document = $cipher->decrypt($message->ciphertext);
                 $excerpt = $document ? mb_strimwidth(trim(preg_replace('/\s+/', ' ', RichText::plain($document)) ?? ''), 0, 80, '…') : null;
-            }
-
-            $since = optional($reads->get($channel->id))->last_read_at;
-            $unreadQuery = Message::query()
-                ->retained($workspace)
-                ->where('channel_id', $channel->id)
-                ->whereNull('deleted_at')
-                ->where('user_id', '!=', $user->id);
-
-            if ($since) {
-                $unreadQuery->where('created_at', '>', $since);
             }
 
             $others = $channel->members->where('id', '!=', $user->id)->values();
@@ -81,7 +83,7 @@ class ChannelController extends ApiController
                 'topic' => $channel->topic,
                 'description' => $channel->description,
                 'excerpt' => $excerpt,
-                'unread' => $unreadQuery->count(),
+                'unread' => $unreadCounts->get($channel->id, 0),
                 'last_at' => $message?->created_at?->toIso8601String(),
                 'people' => $others->map(fn (User $person) => [
                     'id' => $person->id,
