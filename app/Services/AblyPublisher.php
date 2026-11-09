@@ -30,6 +30,22 @@ class AblyPublisher
         }
     }
 
+    public function publishShift(int $workspaceId, int $userId, array $day): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        try {
+            $client = Server::createHttpClient(config('services.ably.key'));
+            $client->channels
+                ->get($this->shiftChannel($workspaceId, $userId))
+                ->publish('shift', ['day' => $day]);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+    }
+
     public function token(User $user): array
     {
         if (! $this->enabled()) {
@@ -41,6 +57,7 @@ class AblyPublisher
         foreach ($user->workspaces()->pluck('workspaces.id') as $workspaceId) {
             $capability[$this->messageChannel($workspaceId, '*')] = ['subscribe'];
             $capability["smackchat:ws:{$workspaceId}:typing:*"] = ['subscribe', 'publish'];
+            $capability[$this->shiftChannel($workspaceId, $user->id)] = ['subscribe'];
         }
 
         try {
@@ -66,6 +83,11 @@ class AblyPublisher
     public function messageChannel(int|string $workspaceId, int|string $channelId): string
     {
         return "smackchat:ws:{$workspaceId}:ch:{$channelId}";
+    }
+
+    public function shiftChannel(int|string $workspaceId, int|string $userId): string
+    {
+        return "smackchat:ws:{$workspaceId}:shift:{$userId}";
     }
 
     public function typingChannel(Workspace $workspace, int $channelId): string

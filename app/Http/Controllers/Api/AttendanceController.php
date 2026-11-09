@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\AttendanceDay;
+use App\Services\AblyPublisher;
 use App\Services\AttendanceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -42,7 +43,7 @@ class AttendanceController extends ApiController
         ]);
     }
 
-    public function punch(Request $request, AttendanceService $attendance)
+    public function punch(Request $request, AttendanceService $attendance, AblyPublisher $ably)
     {
         $data = $request->validate([
             'action' => ['required', Rule::in(['check_in', 'break_in', 'break_out', 'check_out'])],
@@ -51,14 +52,17 @@ class AttendanceController extends ApiController
             'accuracy' => ['nullable', 'numeric', 'min:0'],
         ]);
 
-        $result = $attendance->punch($this->workspace($request), $request->user(), $data['action'], [
+        $workspace = $this->workspace($request);
+        $result = $attendance->punch($workspace, $request->user(), $data['action'], [
             'latitude' => $data['latitude'] ?? null,
             'longitude' => $data['longitude'] ?? null,
             'accuracy' => $data['accuracy'] ?? null,
         ]);
+        $day = $attendance->presentDay($result['day']);
+        $ably->publishShift($workspace->id, $request->user()->id, $day);
 
         return response()->json([
-            'day' => $attendance->presentDay($result['day']),
+            'day' => $day,
             'message' => $result['message'],
         ]);
     }

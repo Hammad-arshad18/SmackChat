@@ -13,12 +13,12 @@ export function realtimeConnected() {
     return client !== null;
 }
 
-export function bindOffice(workspaceId, channels, onMessage) {
+export function bindOffice(workspaceId, channels, userId, onMessage, onShift) {
     stopRealtime();
 
     ready = api.get('/realtime/token').then(({ data }) => {
         if (!data.enabled || !data.token) {
-            return;
+            return false;
         }
 
         client = new Ably.Realtime({
@@ -32,6 +32,13 @@ export function bindOffice(workspaceId, channels, onMessage) {
             realtime.subscribe('message', handler);
             subscriptions.push(() => realtime.unsubscribe('message', handler));
         });
+
+        if (userId) {
+            const shift = client.channels.get(`smackchat:ws:${workspaceId}:shift:${userId}`);
+            const handler = (message) => onShift(message.data);
+            shift.subscribe('shift', handler);
+            subscriptions.push(() => shift.unsubscribe('shift', handler));
+        }
 
         return true;
     }).catch(() => false);

@@ -1,10 +1,52 @@
 import { defineStore } from 'pinia';
 import api from '@/api';
 import { ensureDevice, revealChannels, revealMessage } from '@/e2e';
-import { bindOffice, stopRealtime } from '@/realtime';
+import { bindOffice, realtimeConnected, stopRealtime } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
 
 let channelRefreshTimer = null;
+let shiftPoll = null;
+
+function shiftVersion(day) {
+    const events = day?.events || [];
+    const last = events.reduce((max, event) => Math.max(max, Date.parse(event.happened_at) || 0), 0);
+
+    return last * 1000 + events.length;
+}
+
+function watchShift(store) {
+    clearTimeout(shiftPoll);
+
+    const tick = async () => {
+        if (!store.slug) {
+            return;
+        }
+
+        try {
+            await store.refreshToday();
+        } catch {
+            /* the next pass retries */
+        }
+
+        if (!store.slug) {
+            return;
+        }
+
+        shiftPoll = setTimeout(tick, shiftWait(store));
+    };
+
+    shiftPoll = setTimeout(tick, shiftWait(store));
+}
+
+function shiftWait(store) {
+    if (realtimeConnected()) {
+        return 20000;
+    }
+
+    const status = store.today?.status;
+
+    return status === 'open' || status === 'on_break' ? 5000 : 8000;
+}
 
 function queueChannelRefresh(store) {
     clearTimeout(channelRefreshTimer);
@@ -66,7 +108,48 @@ export const useOfficeStore = defineStore('office', {
                     /* channel list still loads; sending waits until a device key is ready */
                 }
             }
-            bindOffice(this.workspace.id, this.channels, (payload) => this.ingest(payload));
+            bindOffice(
+                this.workspace.id,
+                this.channels,
+                userId,
+                (payload) => this.ingest(payload),
+                (payload) => this.applyShift(payload?.day),
+            );
+            watchShift(this);
+        },
+        applyShift(day) {
+            if (!day || (this.today && shiftVersion(day) < shiftVersion(this.today))) {
+                return;
+            }
+
+            this.today = day;
+
+            const floorIndex = this.floorRows.findIndex((row) => row.user_id === day.user_id && row.work_date === day.work_date);
+            if (floorIndex !== -1) {
+                this.floorRows.splice(floorIndex, 1, { ...this.floorRows[floorIndex], ...day });
+            }
+
+            const monthIndex = this.monthRows.findIndex((row) => row.id === day.id);
+            if (monthIndex !== -1) {
+                this.monthRows.splice(monthIndex, 1, { ...this.monthRows[monthIndex], ...day });
+            }
+        },
+        async refreshToday() {
+            if (!this.slug) {
+                return;
+            }
+
+            const { data } = await api.get(`/workspaces/${this.slug}/attendance/today`);
+
+            if (data.day) {
+                this.applyShift(data.day);
+
+                return;
+            }
+
+            if (!this.today || this.today.status === 'completed') {
+                this.today = null;
+            }
         },
         ingest(payload) {
             this.deliver(payload);
@@ -169,6 +252,8 @@ export const useOfficeStore = defineStore('office', {
             });
         },
         reset() {
+            clearTimeout(shiftPoll);
+            shiftPoll = null;
             stopRealtime();
             this.workspace = null;
             this.channels = [];

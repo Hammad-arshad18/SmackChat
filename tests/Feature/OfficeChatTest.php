@@ -217,6 +217,46 @@ class OfficeChatTest extends TestCase
             ->assertOk();
     }
 
+    public function test_a_break_is_published_so_other_sessions_can_pause_the_clock(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $bag = new \stdClass;
+        $bag->shifts = [];
+        $this->app->instance(AblyPublisher::class, new class($bag) extends AblyPublisher
+        {
+            public function __construct(private object $bag) {}
+
+            public function publishShift(int $workspaceId, int $userId, array $day): void
+            {
+                $this->bag->shifts[] = [
+                    'workspace_id' => $workspaceId,
+                    'user_id' => $userId,
+                    'day' => $day,
+                ];
+            }
+        });
+
+        Carbon::setTestNow(Carbon::parse('2026-11-03 09:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
+            ->assertOk();
+
+        Carbon::setTestNow(Carbon::parse('2026-11-03 12:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_in'])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'on_break');
+
+        Carbon::setTestNow();
+
+        $this->assertCount(2, $bag->shifts);
+        $this->assertSame($workspace->id, $bag->shifts[1]['workspace_id']);
+        $this->assertSame($owner->id, $bag->shifts[1]['user_id']);
+        $this->assertSame('on_break', $bag->shifts[1]['day']['status']);
+        $this->assertSame('break_in', $bag->shifts[1]['day']['events'][1]['type']);
+    }
+
     public function test_history_drops_after_ninety_days_until_the_archive_is_paid(): void
     {
         $owner = $this->openOffice();
