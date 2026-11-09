@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-c">
+  <title id="title-c">SmackChat Concept C — The Dialogue Spark</title>
+  <path fill="#17181C" fill-rule="evenodd" d="
+    M 80 36
+    H 176
+    A 44 44 0 0 1 220 80
+    V 140
+    A 44 44 0 0 1 176 184
+    H 98
+    L 48 220
+    C 56 200 56 190 56 184
+    A 44 44 0 0 1 36 140
+    V 80
+    A 44 44 0 0 1 80 36
+    Z
+    M 146 68
+    L 96 118
+    H 124
+    L 110 154
+    L 160 104
+    H 132
+    L 146 68
+    Z
+    M 174 136
+    A 11 11 0 1 0 174.1 136
+    Z
+  "/>
+</svg>

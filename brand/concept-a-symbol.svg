@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-a">
+  <title id="title-a">SmackChat Concept A — The Floor Clock</title>
+  <path fill="#17181C" fill-rule="evenodd" d="
+    M 115 22
+    H 149
+    A 5 5 0 0 1 154 27
+    V 29
+    A 5 5 0 0 1 149 34
+    H 143
+    V 60.8
+    A 76 76 0 1 1 69.8 179.6
+    C 58 192 48 204 48 218
+    C 58 218 92 214 120 208
+    A 76 76 0 0 1 121 60.8
+    V 34
+    H 115
+    A 5 5 0 0 1 110 29
+    V 27
+    A 5 5 0 0 1 115 22
+    Z
+    M 122 122
+    V 90
+    A 10 10 0 0 1 142 90
+    V 122
+    A 18 18 0 0 1 150 136
+    A 18 18 0 0 1 132 154
+    A 18 18 0 0 1 122 144
+    H 86
+    A 10 10 0 0 1 86 124
+    H 122
+    A 18 18 0 0 1 122 122
+    Z
+    M 132 130
+    A 6 6 0 1 0 132.1 130
+    Z
+  "/>
+</svg>
