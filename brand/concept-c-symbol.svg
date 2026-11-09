@@ -1,28 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-c">
-  <title id="title-c">SmackChat Concept C — The Dialogue Spark</title>
+  <title id="title-c">SmackChat Concept C — The Kinetic Shutter</title>
   <path fill="#17181C" fill-rule="evenodd" d="
-    M 80 36
-    H 176
-    A 44 44 0 0 1 220 80
-    V 140
-    A 44 44 0 0 1 176 184
-    H 98
-    L 48 220
-    C 56 200 56 190 56 184
-    A 44 44 0 0 1 36 140
-    V 80
-    A 44 44 0 0 1 80 36
+    M 128 36
+    A 92 92 0 1 1 127.9 36
     Z
-    M 146 68
-    L 96 118
-    H 124
-    L 110 154
-    L 160 104
-    H 132
-    L 146 68
+    M 128 62
+    A 66 66 0 0 1 194 128
+    C 194 146 182 162 164 168
+    L 136 140
+    C 146 136 152 126 152 116
+    C 152 100 138 88 122 88
+    A 40 40 0 0 0 88 128
+    L 62 128
+    C 62 92 92 62 128 62
     Z
-    M 174 136
-    A 11 11 0 1 0 174.1 136
+    M 128 194
+    A 66 66 0 0 1 62 128
+    C 62 110 74 94 92 88
+    L 120 116
+    C 110 120 104 130 104 140
+    C 104 156 118 168 134 168
+    A 40 40 0 0 0 168 128
+    L 194 128
+    C 194 164 164 194 128 194
+    Z
+    M 128 120
+    A 8 8 0 1 0 128.1 120
     Z
   "/>
 </svg>

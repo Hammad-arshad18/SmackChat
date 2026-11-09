@@ -1,37 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-a">
-  <title id="title-a">SmackChat Concept A — The Floor Clock</title>
-  <path fill="#17181C" fill-rule="evenodd" d="
-    M 115 22
-    H 149
-    A 5 5 0 0 1 154 27
-    V 29
-    A 5 5 0 0 1 149 34
-    H 143
-    V 60.8
-    A 76 76 0 1 1 69.8 179.6
-    C 58 192 48 204 48 218
-    C 58 218 92 214 120 208
-    A 76 76 0 0 1 121 60.8
-    V 34
-    H 115
-    A 5 5 0 0 1 110 29
-    V 27
-    A 5 5 0 0 1 115 22
-    Z
-    M 122 122
-    V 90
-    A 10 10 0 0 1 142 90
-    V 122
-    A 18 18 0 0 1 150 136
-    A 18 18 0 0 1 132 154
-    A 18 18 0 0 1 122 144
-    H 86
-    A 10 10 0 0 1 86 124
-    H 122
-    A 18 18 0 0 1 122 122
-    Z
-    M 132 130
-    A 6 6 0 1 0 132.1 130
-    Z
-  "/>
+  <title id="title-a">SmackChat Concept A — The Precision S-Dot</title>
+  <g fill="#17181C">
+    <!-- Custom Geometric S with 45° Terminal Cuts -->
+    <path d="
+      M 166 76
+      L 190 52
+      C 168 30 138 20 106 20
+      C 54 20 24 54 24 100
+      C 24 152 74 162 118 172
+      C 144 178 158 186 158 202
+      C 158 220 138 232 108 232
+      C 72 232 44 214 24 190
+      L 0 214
+      C 26 246 66 262 108 262
+      C 164 262 198 230 198 194
+      C 198 144 150 134 106 124
+      C 80 118 64 110 64 96
+      C 64 80 80 66 106 66
+      C 132 66 152 72 166 76
+      Z
+    " transform="translate(26, 7) scale(0.81)"/>
+    <!-- Smack Accent Period Dot -->
+    <circle cx="204" cy="214" r="15"/>
+  </g>
 </svg>

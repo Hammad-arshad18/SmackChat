@@ -1,29 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-b">
-  <title id="title-b">SmackChat Concept B — The Kinetic S</title>
+  <title id="title-b">SmackChat Concept B — The Channel Pinwheel</title>
   <g fill="#17181C">
-    <path d="
-      M 196 74
-      V 52
-      C 176 34 148 26 122 26
-      C 76 26 50 56 50 96
-      C 50 134 76 150 114 162
-      L 134 142
-      C 100 132 84 120 84 96
-      C 84 72 100 56 122 56
-      C 142 56 160 62 170 74
-      Z
-    "/>
-    <path d="
-      M 60 182
-      V 204
-      C 80 222 108 230 134 230
-      C 180 230 206 200 206 160
-      C 206 122 180 106 142 94
-      L 122 114
-      C 156 124 172 136 172 160
-      C 172 184 156 200 134 200
-      C 114 200 96 194 86 182
-      Z
-    "/>
+    <!-- Top-Left Voice (horizontal) -->
+    <rect x="46" y="64" width="96" height="36" rx="18"/>
+    <!-- Top-Right Voice (vertical) -->
+    <rect x="156" y="46" width="36" height="96" rx="18"/>
+    <!-- Bottom-Right Voice (horizontal) -->
+    <rect x="114" y="156" width="96" height="36" rx="18"/>
+    <!-- Bottom-Left Voice (vertical) -->
+    <rect x="64" y="114" width="36" height="96" rx="18"/>
+    <!-- Center Presence Core -->
+    <circle cx="128" cy="128" r="14"/>
   </g>
 </svg>
