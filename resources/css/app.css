@@ -2953,7 +2953,8 @@ kbd {
     font-weight: 650;
 }
 
-.deleted-copy {
+.deleted-copy,
+.locked-copy {
     color: var(--muted);
     font-style: italic;
     font-size: 0.82rem;

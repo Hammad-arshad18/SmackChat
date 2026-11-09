@@ -62,7 +62,11 @@ class ChannelController extends ApiController
             $message = $latest->get($channel->id);
             $excerpt = null;
 
-            if ($message) {
+            $latestSealed = null;
+
+            if ($message && $message->cipher === 'e2e') {
+                $latestSealed = $message->ciphertext;
+            } elseif ($message) {
                 $document = $cipher->decrypt($message->ciphertext);
                 $excerpt = $document ? mb_strimwidth(trim(preg_replace('/\s+/', ' ', RichText::plain($document)) ?? ''), 0, 80, '…') : null;
             }
@@ -83,6 +87,7 @@ class ChannelController extends ApiController
                 'topic' => $channel->topic,
                 'description' => $channel->description,
                 'excerpt' => $excerpt,
+                'latest_sealed' => $latestSealed,
                 'unread' => $unreadCounts->get($channel->id, 0),
                 'last_at' => $message?->created_at?->toIso8601String(),
                 'people' => $others->map(fn (User $person) => [

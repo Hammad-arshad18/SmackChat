@@ -64,7 +64,7 @@ async function accept() {
                 <div class="invite-points">
                     <span><i class="pi pi-check" /> Channels, threads, and direct messages</span>
                     <span><i class="pi pi-check" /> A floor clock that files your day</span>
-                    <span><i class="pi pi-check" /> Searchable history, encrypted at rest</span>
+                    <span><i class="pi pi-check" /> Searchable history, end-to-end encrypted</span>
                 </div>
             </div>
         </section>

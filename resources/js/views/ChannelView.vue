@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
 import api, { errorText } from '@/api';
+import { revealMessage, sealDocument, searchMessages } from '@/e2e';
 import Composer from '@/components/Composer.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import MessageBody from '@/components/MessageBody.vue';
@@ -133,11 +134,9 @@ watch(searchQuery, (value) => {
     const token = ++searchToken;
     searchTimer = setTimeout(async () => {
         try {
-            const { data } = await api.get(`/workspaces/${office.slug}/search`, {
-                params: { q: needle, channel: props.channel },
-            });
+            const results = await searchMessages(office, needle, props.channel);
             if (token === searchToken) {
-                searchResults.value = data.results;
+                searchResults.value = results;
             }
         } catch {
             if (token === searchToken) {
@@ -160,7 +159,7 @@ async function load() {
     thread.value = null;
     const params = route.query.m ? { focus: Number(route.query.m) } : {};
     const { data } = await endpoint(params);
-    messages.value = data.messages;
+    messages.value = await hydrate(data.messages);
     hasMore.value = data.has_more;
     loading.value = false;
     clearUnread();
@@ -180,7 +179,7 @@ async function focusFromQuery() {
 
     if (!parent && parentId) {
         const { data } = await endpoint({ focus: parentId });
-        messages.value = data.messages;
+        messages.value = await hydrate(data.messages);
         hasMore.value = data.has_more;
         parent = messages.value.find((message) => message.id === parentId);
     }
@@ -203,7 +202,7 @@ async function older() {
     loadingOlder.value = true;
     const height = scroller.value?.scrollHeight || 0;
     const { data } = await endpoint({ before: first.id });
-    messages.value = [...data.messages, ...messages.value];
+    messages.value = [...await hydrate(data.messages), ...messages.value];
     hasMore.value = data.has_more;
     loadingOlder.value = false;
     await nextTick();
@@ -266,7 +265,21 @@ function canDelete(message) {
     return message.user?.id === auth.user.id || office.manages;
 }
 
-function absorb(payload) {
+async function hydrate(list) {
+    const opened = [];
+
+    for (const message of list || []) {
+        opened.push(await revealMessage(office, message));
+    }
+
+    return opened;
+}
+
+async function absorb(payload) {
+    if (payload?.message) {
+        payload = { ...payload, message: await revealMessage(office, payload.message) };
+    }
+
     const message = payload?.message;
     if (!message || !current.value || message.channel_id !== current.value.id) {
         return;
@@ -314,17 +327,19 @@ async function send(payload) {
 
     try {
         if (editing.value) {
-            const { data } = await api.patch(`/workspaces/${office.slug}/messages/${editing.value.id}`, { document });
-            absorb(data);
+            const sealed = await sealDocument(office, current.value, document);
+            const { data } = await api.patch(`/workspaces/${office.slug}/messages/${editing.value.id}`, { sealed });
+            await absorb(data);
             editing.value = null;
             return;
         }
 
+        const sealed = await sealDocument(office, current.value, document);
         const { data } = await api.post(`/workspaces/${office.slug}/channels/${props.channel}/messages`, {
-            document,
+            sealed,
             attachment_ids: attachmentIds,
         });
-        absorb(data);
+        await absorb(data);
         await stick();
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Message', detail: errorText(error), life: 3000 });
@@ -337,12 +352,13 @@ async function sendReply(payload) {
     const attachmentIds = payload?.attachment_ids || [];
 
     try {
+        const sealed = await sealDocument(office, current.value, document);
         const { data } = await api.post(`/workspaces/${office.slug}/channels/${props.channel}/messages`, {
-            document,
+            sealed,
             parent_id: thread.value.id,
             attachment_ids: attachmentIds,
         });
-        absorb(data);
+        await absorb(data);
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Reply', detail: errorText(error), life: 3000 });
     }
@@ -354,7 +370,7 @@ async function openThread(message) {
     replies.value = [];
     try {
         const { data } = await endpoint({ parent_id: message.id });
-        replies.value = data.messages;
+        replies.value = await hydrate(data.messages);
         await nextTick();
         if (threadScroller.value) threadScroller.value.scrollTop = threadScroller.value.scrollHeight;
         composerRef.value?.focus();
@@ -368,10 +384,11 @@ async function openThread(message) {
 async function react(message, emoji) {
     try {
         const { data } = await api.post(`/workspaces/${office.slug}/messages/${message.id}/reactions`, { emoji });
-        absorb({ message: data.message });
-        const reply = replies.value.find((item) => item.id === data.message.id);
+        const opened = await revealMessage(office, data.message);
+        absorb({ message: opened });
+        const reply = replies.value.find((item) => item.id === opened.id);
         if (reply) {
-            upsert(replies, data.message);
+            upsert(replies, opened);
         }
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Reaction', detail: errorText(error), life: 3000 });
@@ -399,7 +416,7 @@ function remove(message) {
         accept: async () => {
             try {
                 const { data } = await api.delete(`/workspaces/${office.slug}/messages/${message.id}`);
-                absorb(data);
+                await absorb(data);
             } catch (error) {
                 toast.add({ severity: 'error', summary: 'Delete', detail: errorText(error), life: 3000 });
             }
@@ -569,11 +586,11 @@ async function pullNew() {
 
     if (last) {
         const { data } = await endpoint({ after: last.id });
-        data.messages.forEach((message) => {
+        for (const message of await hydrate(data.messages)) {
             upsert(messages, message, { animate: message.user?.id !== auth.user.id });
             announceIncoming(message);
             changed = true;
-        });
+        }
         if (data.messages.length && atBottom.value) {
             stick();
             clearUnread();
@@ -586,10 +603,10 @@ async function pullNew() {
         const lastReply = replies.value.at(-1);
         if (lastReply) params.after = lastReply.id;
         const { data } = await endpoint(params);
-        data.messages.forEach((message) => {
+        for (const message of await hydrate(data.messages)) {
             upsert(replies, message, { animate: message.user?.id !== auth.user.id });
             announceIncoming(message);
-        });
+        }
     }
 
     if (changed) {
@@ -748,6 +765,7 @@ onBeforeUnmount(() => {
                                     <p v-if="message.deleted" class="deleted-copy">This message was deleted.</p>
                                     <template v-else>
                                         <MessageBody v-if="message.document" :node="message.document" />
+                                        <p v-else-if="message.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device.</p>
                                         <MessageAttachments
                                             v-if="message.attachments?.length"
                                             :items="message.attachments"
@@ -864,6 +882,7 @@ onBeforeUnmount(() => {
                         </div>
                         <div class="thread-parent-body">
                             <MessageBody v-if="thread.document" :node="thread.document" />
+                            <p v-else-if="thread.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device.</p>
                             <MessageAttachments
                                 v-if="thread.attachments?.length"
                                 :items="thread.attachments"
@@ -912,6 +931,7 @@ onBeforeUnmount(() => {
                                 <p v-if="reply.deleted" class="deleted-copy">This reply was deleted.</p>
                                 <template v-else>
                                     <MessageBody v-if="reply.document" :node="reply.document" />
+                                    <p v-else-if="reply.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device.</p>
                                     <MessageAttachments
                                         v-if="reply.attachments?.length"
                                         :items="reply.attachments"

@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia';
 import api from '@/api';
+import { ensureDevice, revealChannels, revealMessage } from '@/e2e';
 import { bindOffice, stopRealtime } from '@/realtime';
+import { useAuthStore } from '@/stores/auth';
 
 let channelRefreshTimer = null;
 
@@ -55,11 +57,27 @@ export const useOfficeStore = defineStore('office', {
             this.invitations = members.data.invitations;
             this.today = today.data.day;
             this.floorRows = floor.data.rows || [];
+            const userId = useAuthStore().user?.id;
+            if (userId) {
+                try {
+                    await ensureDevice(userId);
+                    await revealChannels(this);
+                } catch {
+                    /* channel list still loads; sending waits until a device key is ready */
+                }
+            }
             bindOffice(this.workspace.id, this.channels, (payload) => this.ingest(payload));
         },
         ingest(payload) {
-            window.dispatchEvent(new CustomEvent('smack-message', { detail: payload }));
-            const message = payload?.message;
+            this.deliver(payload);
+        },
+        async deliver(payload) {
+            let next = payload;
+            if (payload?.message?.cipher === 'e2e') {
+                next = { ...payload, message: await revealMessage(this, payload.message) };
+            }
+            window.dispatchEvent(new CustomEvent('smack-message', { detail: next }));
+            const message = next?.message;
             const channel = this.channels.find((item) => item.id === message?.channel_id);
 
             if (channel && message) {
@@ -79,6 +97,7 @@ export const useOfficeStore = defineStore('office', {
 
             const { data } = await api.get(`/workspaces/${this.slug}/channels`);
             this.channels = data.channels;
+            await revealChannels(this);
         },
         async refreshMembers() {
             const { data } = await api.get(`/workspaces/${this.slug}/members`);

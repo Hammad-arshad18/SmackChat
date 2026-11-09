@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BillingController;
 use App\Http\Controllers\Api\ChannelController;
+use App\Http\Controllers\Api\E2eController;
 use App\Http\Controllers\Api\InvitationController;
 use App\Http\Controllers\Api\MemberController;
 use App\Http\Controllers\Api\MessageController;
@@ -23,6 +24,7 @@ Route::post('/invitations/{token}/accept', [InvitationController::class, 'accept
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::post('/e2e/devices', [E2eController::class, 'device']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me', [AuthController::class, 'updateProfile']);
     Route::post('/heartbeat', [AuthController::class, 'heartbeat']);
@@ -53,6 +55,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/channels/{channel}/members', [ChannelController::class, 'syncMembers']);
         Route::post('/channels/{channel}/read', [ChannelController::class, 'markRead']);
         Route::post('/dms', [ChannelController::class, 'direct']);
+        Route::get('/channels/{channel}/keys', [E2eController::class, 'show']);
+        Route::put('/channels/{channel}/keys', [E2eController::class, 'update']);
 
         Route::get('/search', [MessageController::class, 'search']);
 

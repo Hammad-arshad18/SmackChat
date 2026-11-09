@@ -6,6 +6,7 @@ use App\Models\Attachment;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\User;
+use App\Support\E2eSealer;
 use App\Support\RichText;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -41,26 +42,11 @@ class MessageWriter
                 'user_id' => $author->id,
                 'parent_id' => $parent?->id,
                 'ciphertext' => $this->cipher->encrypt($document),
+                'cipher' => 'server',
                 'system_type' => $systemType,
             ]);
 
-            if (! empty($attachmentIds)) {
-                $ids = collect($attachmentIds)->map(fn ($id) => (int) $id)->unique()->take(10)->values();
-                $attached = Attachment::query()
-                    ->where('channel_id', $channel->id)
-                    ->where('user_id', $author->id)
-                    ->whereNull('message_id')
-                    ->whereIn('id', $ids)
-                    ->count();
-
-                if ($attached !== $ids->count()) {
-                    throw ValidationException::withMessages([
-                        'attachment_ids' => 'One of those attachments is no longer available. Please upload it again.',
-                    ]);
-                }
-
-                Attachment::query()->whereIn('id', $ids)->update(['message_id' => $message->id]);
-            }
+            $this->attach($channel, $author, $message, $attachmentIds);
 
             if ($parent) {
                 $parent->update([
@@ -85,16 +71,56 @@ class MessageWriter
 
         $this->ably->publish($channel->workspace_id, $channel->id, $payload);
 
-        try {
-            app(WebPushNotifier::class)->notify(
-                $channel,
-                $author,
-                $message,
-                (string) ($payload['message']['excerpt'] ?? ''),
-            );
-        } catch (Throwable $exception) {
-            report($exception);
-        }
+        $this->notify($channel, $author, $message, (string) ($payload['message']['excerpt'] ?? ''));
+
+        return $payload;
+    }
+
+    public function postSealed(
+        Channel $channel,
+        User $author,
+        string $sealed,
+        ?int $parentId = null,
+        array $attachmentIds = [],
+    ): array {
+        $this->access->assertCanView($channel, $author);
+        E2eSealer::assertMessageBlob($sealed);
+        $parent = $this->parent($channel, $parentId);
+
+        $message = DB::transaction(function () use ($channel, $author, $sealed, $parent, $attachmentIds) {
+            $message = Message::query()->create([
+                'channel_id' => $channel->id,
+                'user_id' => $author->id,
+                'parent_id' => $parent?->id,
+                'ciphertext' => $sealed,
+                'cipher' => 'e2e',
+            ]);
+
+            $this->attach($channel, $author, $message, $attachmentIds);
+
+            if ($parent) {
+                $parent->update([
+                    'reply_count' => $parent->replies()->count(),
+                    'last_reply_at' => $message->created_at,
+                ]);
+            }
+
+            return $message;
+        });
+
+        $message->load(['user', 'reactions', 'attachments']);
+        $payload = [
+            'event' => 'message.created',
+            'message' => $this->presenter->present($message, $author),
+            'parent' => $parent ? [
+                'id' => $parent->id,
+                'reply_count' => $parent->fresh()->reply_count,
+                'last_reply_at' => optional($parent->fresh()->last_reply_at)?->toIso8601String(),
+            ] : null,
+        ];
+
+        $this->ably->publish($channel->workspace_id, $channel->id, $payload);
+        $this->notify($channel, $author, $message, '');
 
         return $payload;
     }
@@ -107,6 +133,29 @@ class MessageWriter
 
         $message->update([
             'ciphertext' => $this->cipher->encrypt($document),
+            'cipher' => 'server',
+            'edited_at' => now(),
+        ]);
+
+        $message->load(['user', 'reactions', 'attachments']);
+        $payload = [
+            'event' => 'message.updated',
+            'message' => $this->presenter->present($message, $editor),
+        ];
+        $this->ably->publish($message->channel->workspace_id, $message->channel_id, $payload);
+
+        return $payload;
+    }
+
+    public function editSealed(Message $message, User $editor, string $sealed): array
+    {
+        $this->guardAuthor($message, $editor);
+        abort_if($message->system_type !== null, 422, 'System posts stay as they were written.');
+        abort_unless($message->cipher === 'e2e', 422, 'That message cannot be edited.');
+        E2eSealer::assertMessageBlob($sealed);
+
+        $message->update([
+            'ciphertext' => $sealed,
             'edited_at' => now(),
         ]);
 
@@ -127,7 +176,7 @@ class MessageWriter
         abort_if($message->deleted_at !== null, 422, 'That message is already deleted.');
 
         $message->update([
-            'ciphertext' => $this->cipher->encrypt(RichText::paragraph('Message deleted')),
+            'ciphertext' => '',
             'deleted_at' => now(),
         ]);
 
@@ -146,6 +195,38 @@ class MessageWriter
         $this->ably->publish($message->channel->workspace_id, $message->channel_id, $payload);
 
         return $payload;
+    }
+
+    private function attach(Channel $channel, User $author, Message $message, array $attachmentIds): void
+    {
+        if ($attachmentIds === []) {
+            return;
+        }
+
+        $ids = collect($attachmentIds)->map(fn ($id) => (int) $id)->unique()->take(10)->values();
+        $attached = Attachment::query()
+            ->where('channel_id', $channel->id)
+            ->where('user_id', $author->id)
+            ->whereNull('message_id')
+            ->whereIn('id', $ids)
+            ->count();
+
+        if ($attached !== $ids->count()) {
+            throw ValidationException::withMessages([
+                'attachment_ids' => 'One of those attachments is no longer available. Please upload it again.',
+            ]);
+        }
+
+        Attachment::query()->whereIn('id', $ids)->update(['message_id' => $message->id]);
+    }
+
+    private function notify(Channel $channel, User $author, Message $message, string $excerpt): void
+    {
+        try {
+            app(WebPushNotifier::class)->notify($channel, $author, $message, $excerpt);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
     }
 
     private function parent(Channel $channel, ?int $parentId): ?Message

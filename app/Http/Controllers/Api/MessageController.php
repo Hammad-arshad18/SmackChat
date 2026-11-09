@@ -100,7 +100,6 @@ class MessageController extends ApiController
         $workspace = $this->workspace($request);
         $user = $request->user();
         $data = $request->validate([
-            'q' => ['required', 'string', 'min:2', 'max:100'],
             'channel' => ['nullable', 'string', 'max:120'],
         ]);
 
@@ -123,7 +122,6 @@ class MessageController extends ApiController
             $access->assertCanView($channels->first(), $user);
         }
 
-        $needle = mb_strtolower($data['q']);
         $rows = Message::query()
             ->with(['user', 'reactions', 'attachments'])
             ->whereIn('channel_id', $channels->keys())
@@ -136,17 +134,20 @@ class MessageController extends ApiController
         $results = [];
 
         foreach ($rows as $message) {
-            $document = $cipher->decrypt($message->ciphertext);
-            $text = $document ? trim(RichText::plain($document)) : '';
-            $position = mb_stripos(mb_strtolower($text), $needle);
+            $channel = $channels->get($message->channel_id);
+            $snippet = null;
 
-            if ($text === '' || $position === false) {
-                continue;
+            if ($message->cipher !== 'e2e') {
+                $document = $cipher->decrypt($message->ciphertext);
+                $text = $document ? trim(RichText::plain($document)) : '';
+
+                if ($text === '') {
+                    continue;
+                }
+
+                $snippet = mb_strimwidth(preg_replace('/\s+/', ' ', $text) ?? '', 0, 150, '…');
             }
 
-            $channel = $channels->get($message->channel_id);
-            $start = max(0, $position - 46);
-            $snippet = ($start > 0 ? '…' : '').mb_substr($text, $start, 150).(mb_strlen($text) > $start + 150 ? '…' : '');
             $others = $channel->members->where('id', '!=', $user->id)->values();
 
             $results[] = [
@@ -162,7 +163,7 @@ class MessageController extends ApiController
                 'snippet' => $snippet,
             ];
 
-            if (count($results) >= 60) {
+            if (count($results) >= 200) {
                 break;
             }
         }
@@ -174,19 +175,17 @@ class MessageController extends ApiController
     {
         $model = $access->find($this->workspace($request), $channel);
         $data = $request->validate([
-            'document' => ['required', 'array'],
+            'sealed' => ['required', 'string', 'max:64000'],
             'parent_id' => ['nullable', 'integer'],
             'attachment_ids' => ['nullable', 'array', 'max:10'],
             'attachment_ids.*' => ['integer'],
         ]);
 
-        $payload = $writer->post(
+        $payload = $writer->postSealed(
             $model,
             $request->user(),
-            $data['document'],
+            $data['sealed'],
             $data['parent_id'] ?? null,
-            null,
-            false,
             $data['attachment_ids'] ?? []
         );
 
@@ -196,9 +195,9 @@ class MessageController extends ApiController
     public function update(Request $request, string $workspace, Message $message, ChannelAccess $access, MessageWriter $writer)
     {
         $this->guardMessage($request, $message, $access);
-        $data = $request->validate(['document' => ['required', 'array']]);
+        $data = $request->validate(['sealed' => ['required', 'string', 'max:64000']]);
 
-        return response()->json($writer->edit($message, $request->user(), $data['document']));
+        return response()->json($writer->editSealed($message, $request->user(), $data['sealed']));
     }
 
     public function destroy(Request $request, string $workspace, Message $message, ChannelAccess $access, MessageWriter $writer)

@@ -13,7 +13,8 @@ class MessagePresenter
     public function present(Message $message, User $viewer): array
     {
         $deleted = $message->deleted_at !== null;
-        $document = $deleted ? null : $this->cipher->decrypt($message->ciphertext);
+        $endToEnd = $message->cipher === 'e2e';
+        $document = ($deleted || $endToEnd) ? null : $this->cipher->decrypt($message->ciphertext);
         $text = $document ? trim(RichText::plain($document)) : '';
 
         $reactions = $message->relationLoaded('reactions')
@@ -38,13 +39,17 @@ class MessagePresenter
             ] : null,
             'document' => $document,
             'text' => $deleted ? '' : $text,
+            'sealed' => ($deleted || ! $endToEnd) ? null : $message->ciphertext,
+            'cipher' => $endToEnd ? 'e2e' : 'server',
             'excerpt' => $deleted
                 ? 'Message deleted'
-                : ($text !== ''
-                    ? mb_strimwidth(preg_replace('/\s+/', ' ', $text) ?? '', 0, 90, '…')
-                    : ($attachments->isNotEmpty()
-                        ? ($attachments->count() === 1 ? 'Sent an attachment' : 'Sent '.$attachments->count().' attachments')
-                        : '')),
+                : ($endToEnd
+                    ? null
+                    : ($text !== ''
+                        ? mb_strimwidth(preg_replace('/\s+/', ' ', $text) ?? '', 0, 90, '…')
+                        : ($attachments->isNotEmpty()
+                            ? ($attachments->count() === 1 ? 'Sent an attachment' : 'Sent '.$attachments->count().' attachments')
+                            : ''))),
             'system_type' => $message->system_type,
             'reply_count' => $message->reply_count,
             'last_reply_at' => optional($message->last_reply_at)?->toIso8601String(),
