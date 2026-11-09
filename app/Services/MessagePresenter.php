@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Message;
 use App\Models\User;
+use App\Support\OpaqueId;
 use App\Support\RichText;
 
 class MessagePresenter
@@ -29,8 +30,10 @@ class MessagePresenter
 
         return [
             'id' => $message->id,
+            'ref' => OpaqueId::encode($message->id),
             'channel_id' => $message->channel_id,
             'parent_id' => $message->parent_id,
+            'parent_ref' => $message->parent_id ? OpaqueId::encode($message->parent_id) : null,
             'user' => $message->user ? [
                 'id' => $message->user->id,
                 'name' => $message->user->name,

@@ -148,7 +148,9 @@ function onOfficeMessage(event) {
     const channel = office.channels.find((item) => item.id === message.channel_id);
     const label = channel?.label || office.workspace?.name || 'SmackChat';
     const title = message.parent_id ? `Thread in ${label}` : label;
-    const thread = message.parent_id ? `?m=${message.parent_id}&reply=${message.id}` : `?m=${message.id}`;
+    const thread = message.parent_ref
+        ? `?m=${encodeURIComponent(message.parent_ref)}&reply=${encodeURIComponent(message.ref)}`
+        : (message.ref ? `?m=${encodeURIComponent(message.ref)}` : '');
 
     showAlert(title, {
         body: `${message.user?.name || 'Someone'}: ${message.excerpt || 'New message'}`,

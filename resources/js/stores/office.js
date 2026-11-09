@@ -80,12 +80,14 @@ export const useOfficeStore = defineStore('office', {
             const message = next?.message;
             const channel = this.channels.find((item) => item.id === message?.channel_id);
 
-            if (channel && message) {
+            if (next?.event !== 'message.reacted' && channel && message) {
                 channel.excerpt = message.excerpt || channel.excerpt;
                 channel.last_at = message.created_at || channel.last_at;
             }
 
-            queueChannelRefresh(this);
+            if (next?.event !== 'message.reacted') {
+                queueChannelRefresh(this);
+            }
         },
         scheduleRefresh() {
             queueChannelRefresh(this);

@@ -31,6 +31,7 @@ const loadingOlder = ref(false);
 const scroller = ref(null);
 const threadScroller = ref(null);
 const composerRef = ref(null);
+const threadComposerRef = ref(null);
 const typing = ref('');
 const editing = ref(null);
 const detailsOpen = ref(false);
@@ -78,19 +79,9 @@ const channelMembers = computed(() => {
     return office.members.filter((person) => ids.has(person.id));
 });
 const canManageMembers = computed(() => current.value?.type === 'private' || (current.value?.type === 'attendance' && office.manages));
-const composerKey = computed(() => {
-    if (editing.value) return `edit-${editing.value.id}`;
-    if (thread.value) return `reply-${thread.value.id}`;
-    return `channel-${props.channel}`;
-});
-const composerPlaceholder = computed(() => (
-    thread.value && !editing.value ? 'Reply in thread…' : `Message ${current.value?.label || ''}`
-));
-const composerSubmit = computed(() => {
-    if (editing.value) return 'Save changes';
-    if (thread.value) return 'Reply';
-    return 'Send';
-});
+const composerKey = computed(() => (editing.value ? `edit-${editing.value.id}` : `channel-${props.channel}`));
+const composerPlaceholder = computed(() => `Message ${current.value?.label || ''}`);
+const composerSubmit = computed(() => (editing.value ? 'Save changes' : 'Send'));
 
 watch(current, (channel) => {
     channelForm.topic = channel?.topic || '';
@@ -108,11 +99,30 @@ watch(() => props.channel, async () => {
 
 watch(() => [route.query.m, route.query.reply, props.channel], async (value, previous) => {
     const channelChanged = !previous || value[2] !== previous[2];
-    if (channelChanged || loading.value || !route.query.m) {
+    if (channelChanged || loading.value || !route.query.m || route.query.thread) {
         return;
     }
 
     await focusFromQuery();
+});
+
+watch(() => route.query.thread, async (id) => {
+    if (loading.value) {
+        return;
+    }
+
+    const next = queryToken(id);
+    if ((thread.value?.ref || '') === next) {
+        return;
+    }
+
+    if (!next) {
+        thread.value = null;
+        replies.value = [];
+        return;
+    }
+
+    await restoreThread(next);
 });
 
 watch([() => current.value?.id, thread], () => {
@@ -150,21 +160,41 @@ watch(searchQuery, (value) => {
     }, 240);
 });
 
+function queryToken(value) {
+    const token = Array.isArray(value) ? value[0] : value;
+
+    return typeof token === 'string' && token.startsWith('v1.') ? token : '';
+}
+
 function endpoint(params = {}) {
     return api.get(`/workspaces/${office.slug}/channels/${props.channel}/messages`, { params });
 }
 
 async function load() {
     loading.value = true;
-    thread.value = null;
-    const params = route.query.m ? { focus: Number(route.query.m) } : {};
+    const threadToken = queryToken(route.query.thread);
+    if ((route.query.thread && !threadToken) || (route.query.m && !queryToken(route.query.m)) || (route.query.reply && !queryToken(route.query.reply))) {
+        const cleaned = { ...route.query };
+        if (!threadToken) delete cleaned.thread;
+        if (!queryToken(route.query.m)) delete cleaned.m;
+        if (!queryToken(route.query.reply)) delete cleaned.reply;
+        router.replace({ query: cleaned });
+    }
+    if ((thread.value?.ref || '') !== threadToken) {
+        thread.value = null;
+        replies.value = [];
+    }
+    const focusToken = queryToken(route.query.m) || threadToken;
+    const params = focusToken ? { focus: focusToken } : {};
     const { data } = await endpoint(params);
     messages.value = await hydrate(data.messages);
     hasMore.value = data.has_more;
     loading.value = false;
     clearUnread();
 
-    if (route.query.m) {
+    if (threadToken) {
+        await restoreThread(threadToken);
+    } else if (queryToken(route.query.m)) {
         await focusFromQuery();
     } else {
         await stick();
@@ -173,27 +203,80 @@ async function load() {
     setupTyping();
 }
 
-async function focusFromQuery() {
-    const parentId = Number(route.query.m);
-    let parent = messages.value.find((message) => message.id === parentId);
+function syncThreadQuery(ref, history = 'replace') {
+    const next = { ...route.query };
+    delete next.m;
+    delete next.reply;
+    if (ref) {
+        next.thread = ref;
+    } else {
+        delete next.thread;
+    }
 
-    if (!parent && parentId) {
-        const { data } = await endpoint({ focus: parentId });
+    const unchanged = String(route.query.thread || '') === String(next.thread || '')
+        && !route.query.m
+        && !route.query.reply;
+    if (unchanged) {
+        return;
+    }
+
+    const location = { query: next };
+    if (history === 'push') {
+        router.push(location);
+    } else {
+        router.replace(location);
+    }
+}
+
+async function restoreThread(token) {
+    let parent = messages.value.find((message) => message.ref === token && !message.parent_id);
+
+    if (!parent && token) {
+        const { data } = await endpoint({ focus: token });
         messages.value = await hydrate(data.messages);
         hasMore.value = data.has_more;
-        parent = messages.value.find((message) => message.id === parentId);
+        parent = messages.value.find((message) => message.ref === token && !message.parent_id);
+    }
+
+    if (!parent) {
+        syncThreadQuery(null);
+        await stick();
+        return;
+    }
+
+    await openThread(parent, { focus: false, history: 'replace' });
+}
+
+function closeThread() {
+    thread.value = null;
+    replies.value = [];
+    syncThreadQuery(null);
+}
+
+async function focusFromQuery() {
+    const parentToken = queryToken(route.query.m);
+    let parent = messages.value.find((message) => message.ref === parentToken);
+
+    if (!parent && parentToken) {
+        const { data } = await endpoint({ focus: parentToken });
+        messages.value = await hydrate(data.messages);
+        hasMore.value = data.has_more;
+        parent = messages.value.find((message) => message.ref === parentToken);
     }
 
     if (!parent) {
         return false;
     }
 
-    if (route.query.reply) {
-        await openThread(parent);
-        return highlightMessage(Number(route.query.reply));
+    const replyToken = queryToken(route.query.reply);
+    if (replyToken) {
+        await openThread(parent, { history: 'replace' });
+        const reply = replies.value.find((message) => message.ref === replyToken);
+
+        return reply ? highlightMessage(reply.id) : false;
     }
 
-    return highlightMessage(parentId);
+    return highlightMessage(parent.id);
 }
 
 async function older() {
@@ -230,6 +313,44 @@ function clearUnread() {
     if (channel?.unread) {
         channel.unread = 0;
     }
+}
+
+function mergeLive(existing, incoming) {
+    if (!existing) {
+        return incoming;
+    }
+
+    if (incoming.deleted) {
+        return { ...existing, ...incoming, document: null, text: '' };
+    }
+
+    return {
+        ...existing,
+        ...incoming,
+        document: incoming.document || existing.document,
+        text: incoming.text || existing.text,
+        excerpt: incoming.excerpt || existing.excerpt,
+        sealed: incoming.sealed || existing.sealed,
+    };
+}
+
+function localizeReactions(message, actorId) {
+    if (!actorId || actorId === auth.user?.id) {
+        return message;
+    }
+
+    const previous = messages.value.find((item) => item.id === message.id)
+        || replies.value.find((item) => item.id === message.id)
+        || (thread.value?.id === message.id ? thread.value : null);
+    const mine = new Map((previous?.reactions || []).map((reaction) => [reaction.emoji, reaction.mine]));
+
+    return {
+        ...message,
+        reactions: (message.reactions || []).map((reaction) => ({
+            ...reaction,
+            mine: Boolean(mine.get(reaction.emoji)),
+        })),
+    };
 }
 
 function upsert(list, message, { animate = false } = {}) {
@@ -280,9 +401,14 @@ async function absorb(payload) {
         payload = { ...payload, message: await revealMessage(office, payload.message) };
     }
 
-    const message = payload?.message;
+    let message = payload?.message;
     if (!message || !current.value || message.channel_id !== current.value.id) {
         return;
+    }
+
+    message = localizeReactions(message, payload.actor_id);
+    if (thread.value?.id === message.id) {
+        thread.value = mergeLive(thread.value, message);
     }
 
     const isFresh = payload?.event === 'message.created' || (
@@ -297,16 +423,23 @@ async function absorb(payload) {
             parent.last_reply_at = payload.parent.last_reply_at;
         }
         if (thread.value?.id === message.parent_id) {
-            upsert(replies, message, { animate: isFresh && message.user?.id !== auth.user.id });
-            nextTick(() => {
-                if (threadScroller.value) threadScroller.value.scrollTop = threadScroller.value.scrollHeight;
-            });
+            upsert(replies, mergeLive(replies.value.find((item) => item.id === message.id), message), { animate: isFresh && message.user?.id !== auth.user.id });
+            if (payload?.event !== 'message.reacted') {
+                nextTick(() => {
+                    if (threadScroller.value) threadScroller.value.scrollTop = threadScroller.value.scrollHeight;
+                });
+            }
         }
         return;
     }
 
+    if (payload?.event === 'message.reacted') {
+        upsert(messages, mergeLive(messages.value.find((item) => item.id === message.id), message));
+        return;
+    }
+
     const nearBottom = atBottom.value;
-    upsert(messages, message, { animate: isFresh && message.user?.id !== auth.user.id });
+    upsert(messages, mergeLive(messages.value.find((item) => item.id === message.id), message), { animate: isFresh && message.user?.id !== auth.user.id });
     clearUnread();
     if (nearBottom) {
         api.post(`/workspaces/${office.slug}/channels/${props.channel}/read`).catch(() => {});
@@ -317,11 +450,6 @@ async function absorb(payload) {
 }
 
 async function send(payload) {
-    if (thread.value && !editing.value) {
-        await sendReply(payload);
-        return;
-    }
-
     const document = payload?.document || payload;
     const attachmentIds = payload?.attachment_ids || [];
 
@@ -364,16 +492,26 @@ async function sendReply(payload) {
     }
 }
 
-async function openThread(message) {
+async function openThread(message, { focus = true, history = 'push' } = {}) {
+    if (!message?.id) {
+        return;
+    }
+
     editing.value = null;
+    const already = thread.value?.id === message.id && replies.value.length;
     thread.value = message;
-    replies.value = [];
+    syncThreadQuery(message.ref, history);
+    if (!already) {
+        replies.value = [];
+    }
+
     try {
         const { data } = await endpoint({ parent_id: message.id });
         replies.value = await hydrate(data.messages);
         await nextTick();
         if (threadScroller.value) threadScroller.value.scrollTop = threadScroller.value.scrollHeight;
-        composerRef.value?.focus();
+        document.getElementById(`msg-${message.id}`)?.scrollIntoView({ block: 'center' });
+        if (focus) threadComposerRef.value?.focus();
         api.post(`/workspaces/${office.slug}/channels/${props.channel}/read`).catch(() => {});
         clearUnread();
     } catch (error) {
@@ -384,12 +522,7 @@ async function openThread(message) {
 async function react(message, emoji) {
     try {
         const { data } = await api.post(`/workspaces/${office.slug}/messages/${message.id}/reactions`, { emoji });
-        const opened = await revealMessage(office, data.message);
-        absorb({ message: opened });
-        const reply = replies.value.find((item) => item.id === opened.id);
-        if (reply) {
-            upsert(replies, opened);
-        }
+        await absorb(data);
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Reaction', detail: errorText(error), life: 3000 });
     }
@@ -434,7 +567,7 @@ async function copyMessage(message) {
 }
 
 function startEdit(message) {
-    thread.value = null;
+    closeThread();
     editing.value = message;
     nextTick(() => composerRef.value?.focus());
 }
@@ -530,9 +663,9 @@ async function highlightMessage(id) {
 
 async function goToResult(result) {
     searchOpen.value = false;
-    const query = result.message.parent_id
-        ? { m: String(result.message.parent_id), reply: String(result.message.id) }
-        : { m: String(result.message.id) };
+    const query = result.message.parent_ref
+        ? { m: result.message.parent_ref, reply: result.message.ref }
+        : { m: result.message.ref };
     const path = `/w/${office.slug}/c/${result.channel?.slug || props.channel}`;
     const dest = `${path}?${new URLSearchParams(query).toString()}`;
 
@@ -865,13 +998,38 @@ onBeforeUnmount(() => {
                 </Transition>
             </section>
 
+            <footer class="composer-dock">
+                <div v-if="typing && !thread" class="typing-line">
+                    <span class="typing-dots"><i /><i /><i /></span>
+                    <strong>{{ typing }}</strong> is typing…
+                </div>
+                <div v-if="editing" class="editing-line">
+                    <i class="pi pi-pencil" />
+                    <span>Editing a message</span>
+                    <Button label="Cancel" link size="small" @click="editing = null" />
+                </div>
+                <Composer
+                    ref="composerRef"
+                    :key="composerKey"
+                    :placeholder="composerPlaceholder"
+                    :members="mentionPeople"
+                    :channel="props.channel"
+                    :initial="editing?.document || null"
+                    :allow-attachments="!editing"
+                    :submit-label="composerSubmit"
+                    :draft-key="editing ? '' : `channel-${office.slug}-${props.channel}`"
+                    @send="send"
+                    @typing="current && publishTyping(office.workspace.id, current.id, { user_id: auth.user.id, name: auth.user.name })"
+                />
+            </footer>
+
             <aside v-if="thread" class="thread-panel">
                 <header class="thread-head">
                     <div>
                         <p class="card-kicker">Thread</p>
-                        <h2>{{ thread.reply_count + 1 }} message{{ thread.reply_count === 0 ? '' : 's' }}</h2>
+                        <h2>{{ current?.label || 'Conversation' }}</h2>
                     </div>
-                    <Button icon="pi pi-times" text rounded aria-label="Close thread" @click="thread = null" />
+                    <Button icon="pi pi-times" text rounded aria-label="Close thread" @click="closeThread" />
                 </header>
 
                 <div ref="threadScroller" class="thread-scroll">
@@ -903,7 +1061,8 @@ onBeforeUnmount(() => {
                         </div>
                     </article>
 
-                    <p v-if="!replies.length" class="thread-empty">No replies yet. Start the thread below.</p>
+                    <p v-if="!replies.length" class="thread-empty">No replies yet.</p>
+                    <div v-else class="thread-replies-label">{{ replies.length }} {{ replies.length === 1 ? 'reply' : 'replies' }}</div>
 
                     <article
                         v-for="reply in replies"
@@ -975,38 +1134,26 @@ onBeforeUnmount(() => {
                         </div>
                     </article>
                 </div>
+
+                <footer class="thread-composer">
+                    <div v-if="typing" class="typing-line">
+                        <span class="typing-dots"><i /><i /><i /></span>
+                        <strong>{{ typing }}</strong> is typing…
+                    </div>
+                    <Composer
+                        ref="threadComposerRef"
+                        :key="`reply-${thread.id}`"
+                        placeholder="Reply…"
+                        submit-label="Reply"
+                        :members="mentionPeople"
+                        :channel="props.channel"
+                        :draft-key="`reply-${office.slug}-${thread.id}`"
+                        @send="sendReply"
+                        @typing="current && publishTyping(office.workspace.id, current.id, { user_id: auth.user.id, name: auth.user.name })"
+                    />
+                </footer>
             </aside>
         </div>
-
-        <footer class="composer-dock">
-            <div v-if="typing" class="typing-line">
-                <span class="typing-dots"><i /><i /><i /></span>
-                <strong>{{ typing }}</strong> is typing…
-            </div>
-            <div v-if="editing" class="editing-line">
-                <i class="pi pi-pencil" />
-                <span>Editing a message</span>
-                <Button label="Cancel" link size="small" @click="editing = null" />
-            </div>
-            <div v-else-if="thread" class="editing-line">
-                <i class="pi pi-comments" />
-                <span>Replying in thread</span>
-                <Button label="Cancel" link size="small" @click="thread = null" />
-            </div>
-            <Composer
-                ref="composerRef"
-                :key="composerKey"
-                :placeholder="composerPlaceholder"
-                :members="mentionPeople"
-                :channel="props.channel"
-                :initial="editing?.document || null"
-                :allow-attachments="!editing"
-                :submit-label="composerSubmit"
-                :draft-key="editing ? '' : thread ? `reply-${office.slug}-${thread.id}` : `channel-${office.slug}-${props.channel}`"
-                @send="send"
-                @typing="current && publishTyping(office.workspace.id, current.id, { user_id: auth.user.id, name: auth.user.name })"
-            />
-        </footer>
 
         <Popover ref="reactionPop">
             <div class="emoji-grid">

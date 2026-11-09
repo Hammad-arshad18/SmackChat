@@ -5,8 +5,10 @@ namespace Tests\Feature;
 use App\Mail\RegistrationCodeMail;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\AblyPublisher;
 use App\Services\WebPushNotifier;
 use App\Services\WorkspaceProvisioner;
+use App\Support\OpaqueId;
 use Base64Url\Base64Url;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -457,13 +459,22 @@ class OfficeChatTest extends TestCase
             'parent_id' => $parent,
         ])->assertCreated()->json('message.id');
 
-        $focused = $this->actingAs($owner, 'sanctum')
+        $replyRef = OpaqueId::encode($reply);
+
+        $ignored = $this->actingAs($owner, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/channels/general/messages?focus={$reply}")
+            ->assertOk()
+            ->json();
+        $this->assertArrayNotHasKey('focus_id', $ignored);
+
+        $focused = $this->actingAs($owner, 'sanctum')
+            ->getJson('/api/workspaces/'.$workspace->slug.'/channels/general/messages?focus='.urlencode($replyRef))
             ->assertOk()
             ->json();
 
         $this->assertSame($parent, $focused['focus_id']);
         $this->assertTrue(collect($focused['messages'])->pluck('id')->contains($parent));
+        $this->assertSame(OpaqueId::encode($parent), collect($focused['messages'])->firstWhere('id', $parent)['ref'] ?? null);
 
         $channel = collect($this->actingAs($owner, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/channels")
@@ -544,6 +555,41 @@ class OfficeChatTest extends TestCase
             ->assertOk()
             ->assertJsonPath('user.name', 'Ada L.')
             ->assertJsonPath('user.status_text', 'Heads down');
+    }
+
+    public function test_reactions_are_broadcast_to_the_conversation(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $message = $this->party($owner)->send($this, $workspace->slug, 'general', 'Ship the homepage.')
+            ->assertCreated()
+            ->json('message');
+
+        $bag = new \stdClass;
+        $bag->events = [];
+        $this->app->instance(AblyPublisher::class, new class($bag) extends AblyPublisher
+        {
+            public function __construct(private object $bag) {}
+
+            public function publish(int $workspaceId, int $channelId, array $payload): void
+            {
+                $this->bag->events[] = $payload;
+            }
+        });
+
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/messages/{$message['id']}/reactions", [
+                'emoji' => '👍',
+            ])
+            ->assertOk()
+            ->assertJsonPath('event', 'message.reacted')
+            ->assertJsonPath('actor_id', $owner->id)
+            ->assertJsonPath('message.reactions.0.emoji', '👍')
+            ->assertJsonPath('message.reactions.0.count', 1);
+
+        $this->assertSame('message.reacted', $bag->events[0]['event'] ?? null);
+        $this->assertSame($message['id'], $bag->events[0]['message']['id'] ?? null);
+        $this->assertStringNotContainsString('Ship the homepage.', json_encode($bag->events[0]));
     }
 
     private function party(User $user): E2eParty

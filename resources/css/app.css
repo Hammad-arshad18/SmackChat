@@ -2570,7 +2570,7 @@ kbd {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
     background: var(--surface-2);
 }
 
@@ -2660,12 +2660,20 @@ kbd {
 }
 
 .chat-body {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
     min-height: 0;
+    min-width: 0;
+}
+
+.chat.with-thread .chat-body {
+    grid-template-columns: minmax(0, 1fr) min(440px, 42vw);
 }
 
 .transcript {
-    flex: 1;
+    grid-column: 1;
+    grid-row: 1;
     min-width: 0;
     overflow: auto;
     position: relative;
@@ -3129,6 +3137,8 @@ kbd {
 }
 
 .composer-dock {
+    grid-column: 1;
+    grid-row: 2;
     padding: 10px 22px 16px;
     border-top: 1px solid var(--line);
     background: var(--surface-2);
@@ -3158,13 +3168,23 @@ kbd {
 }
 
 .thread-panel {
-    width: min(420px, 42vw);
-    flex: none;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    min-width: 0;
     min-height: 0;
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
     border-left: 1px solid var(--line);
     background: var(--surface);
+    overflow: hidden;
+}
+
+.thread-head,
+.thread-scroll,
+.thread-composer {
+    min-width: 0;
+    max-width: 100%;
 }
 
 .thread-head {
@@ -3233,6 +3253,23 @@ kbd {
     font-size: 0.75rem;
     text-align: center;
     padding: 18px 8px;
+}
+
+.thread-replies-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted-strong);
+    font-size: 0.72rem;
+    font-weight: 650;
+}
+
+.thread-replies-label::before,
+.thread-replies-label::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: var(--line);
 }
 
 .thread-reply {
@@ -3310,6 +3347,20 @@ kbd {
     padding: 10px 12px 12px;
     border-top: 1px solid var(--line);
     background: var(--surface);
+}
+
+.thread-composer .typing-line {
+    margin-bottom: 8px;
+}
+
+.thread-composer .composer-hint,
+.thread-composer .composer-count {
+    display: none;
+}
+
+.thread-composer .composer-input .ProseMirror {
+    min-height: 42px;
+    max-height: 140px;
 }
 
 .channel-empty {
@@ -6333,12 +6384,46 @@ kbd {
     .people-grid {
         grid-template-columns: minmax(0, 1fr);
     }
-    .thread-panel {
-        position: absolute;
-        inset: 0 0 0 auto;
-        width: min(420px, 92vw);
-        z-index: 30;
-        box-shadow: var(--shadow-lift);
+    .chat.with-thread .chat-body {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .chat.with-thread .thread-panel {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        height: 100dvh;
+        max-width: none;
+        grid-column: auto;
+        grid-row: auto;
+        z-index: 80;
+        border-left: 0;
+        box-shadow: none;
+    }
+    .chat.with-thread .composer-dock {
+        display: none;
+    }
+    .thread-head {
+        padding-top: calc(15px + env(safe-area-inset-top));
+    }
+    .thread-composer {
+        padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+    .thread-composer .composer,
+    .thread-composer .composer-shell {
+        min-width: 0;
+        max-width: 100%;
+    }
+    .thread-composer .composer-toolbar {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+    .thread-composer .composer-toolbar::-webkit-scrollbar {
+        display: none;
+    }
+    .thread-composer .composer-hint {
+        display: none;
     }
     .chat-body { position: relative; min-width: 0; }
     .chat { min-width: 0; }
@@ -6396,7 +6481,7 @@ kbd {
     .chat-copy p { max-width: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .history-tag { display: none; }
     .transcript { padding: 12px 12px 20px; }
-    .composer-dock { padding: 8px 12px 12px; }
+    .composer-dock { padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); }
     .msg-row { max-width: 94%; }
     .msg-avatar { width: 26px; }
     .msg-bubble { padding: 8px 11px 9px; }

@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\AblyPublisher;
 use App\Services\ChannelAccess;
 use App\Services\MessageCipher;
 use App\Services\MessagePresenter;
 use App\Services\MessageWriter;
+use App\Support\OpaqueId;
 use App\Support\RichText;
 use Illuminate\Http\Request;
 
@@ -24,16 +26,18 @@ class MessageController extends ApiController
             'parent_id' => ['nullable', 'integer'],
             'before' => ['nullable', 'integer'],
             'after' => ['nullable', 'integer'],
-            'focus' => ['nullable', 'integer'],
+            'focus' => ['nullable', 'string', 'max:80'],
         ]);
+
+        $focusId = OpaqueId::decode($data['focus'] ?? null);
 
         $query = Message::query()
             ->with(['user', 'reactions', 'attachments'])
             ->where('channel_id', $model->id)
             ->retained($workspaceModel);
 
-        if (! empty($data['focus']) && empty($data['parent_id']) && empty($data['before']) && empty($data['after'])) {
-            $target = (clone $query)->whereKey($data['focus'])->first();
+        if ($focusId && empty($data['parent_id']) && empty($data['before']) && empty($data['after'])) {
+            $target = (clone $query)->whereKey($focusId)->first();
 
             if ($target) {
                 $anchorId = $target->parent_id ?: $target->id;
@@ -211,7 +215,7 @@ class MessageController extends ApiController
         ));
     }
 
-    public function react(Request $request, string $workspace, Message $message, ChannelAccess $access)
+    public function react(Request $request, string $workspace, Message $message, ChannelAccess $access, AblyPublisher $ably)
     {
         $this->guardMessage($request, $message, $access);
         abort_if($message->deleted_at !== null, 422, 'Deleted messages cannot take reactions.');
@@ -235,12 +239,16 @@ class MessageController extends ApiController
             ]);
         }
 
-        $message->load(['user', 'reactions', 'attachments']);
+        $message->load(['user', 'reactions', 'attachments', 'channel']);
         $presenter = app(MessagePresenter::class);
-
-        return response()->json([
+        $payload = [
+            'event' => 'message.reacted',
+            'actor_id' => $request->user()->id,
             'message' => $presenter->present($message, $request->user()),
-        ]);
+        ];
+        $ably->publish($message->channel->workspace_id, $message->channel_id, $payload);
+
+        return response()->json($payload);
     }
 
     private function guardMessage(Request $request, Message $message, ChannelAccess $access): void
