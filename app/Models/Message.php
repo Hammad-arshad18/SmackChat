@@ -14,6 +14,7 @@ class Message extends Model
         'user_id',
         'parent_id',
         'ciphertext',
+        'cipher',
         'system_type',
         'reply_count',
         'last_reply_at',

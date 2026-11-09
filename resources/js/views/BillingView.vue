@@ -186,7 +186,7 @@ async function standard() {
                 <ol class="history-steps">
                     <li>
                         <span class="step-number">01</span>
-                        <div><strong>Messages live in the workspace</strong><p>Channels, direct messages, threads, and reactions are stored encrypted at rest on the server.</p></div>
+                        <div><strong>Messages live in the workspace</strong><p>Channels, direct messages, and threads are end-to-end encrypted. The server stores ciphertext and cannot read the text.</p></div>
                     </li>
                     <li>
                         <span class="step-number">02</span>

@@ -299,7 +299,7 @@ function leaveWorkspace() {
                 <Divider />
                 <div class="account-note">
                     <i class="pi pi-lock" />
-                    <p>Message text is encrypted at rest with the application key. The history window is controlled by the workspace plan.</p>
+                    <p>Message text is encrypted on this device before it is sent. The server stores and delivers the ciphertext, and only devices in the conversation can read it. The history window is controlled by the workspace plan.</p>
                 </div>
                 <Button label="Open command palette" icon="pi pi-search" severity="secondary" outlined size="small" @click="ui.openCommand()" />
             </section>

@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\AblyPublisher;
 use App\Services\ChannelAccess;
 use App\Services\MessageCipher;
 use App\Services\MessagePresenter;
 use App\Services\MessageWriter;
+use App\Support\OpaqueId;
 use App\Support\RichText;
 use Illuminate\Http\Request;
 
@@ -24,16 +26,18 @@ class MessageController extends ApiController
             'parent_id' => ['nullable', 'integer'],
             'before' => ['nullable', 'integer'],
             'after' => ['nullable', 'integer'],
-            'focus' => ['nullable', 'integer'],
+            'focus' => ['nullable', 'string', 'max:80'],
         ]);
+
+        $focusId = OpaqueId::decode($data['focus'] ?? null);
 
         $query = Message::query()
             ->with(['user', 'reactions', 'attachments'])
             ->where('channel_id', $model->id)
             ->retained($workspaceModel);
 
-        if (! empty($data['focus']) && empty($data['parent_id']) && empty($data['before']) && empty($data['after'])) {
-            $target = (clone $query)->whereKey($data['focus'])->first();
+        if ($focusId && empty($data['parent_id']) && empty($data['before']) && empty($data['after'])) {
+            $target = (clone $query)->whereKey($focusId)->first();
 
             if ($target) {
                 $anchorId = $target->parent_id ?: $target->id;
@@ -100,7 +104,6 @@ class MessageController extends ApiController
         $workspace = $this->workspace($request);
         $user = $request->user();
         $data = $request->validate([
-            'q' => ['required', 'string', 'min:2', 'max:100'],
             'channel' => ['nullable', 'string', 'max:120'],
         ]);
 
@@ -123,7 +126,6 @@ class MessageController extends ApiController
             $access->assertCanView($channels->first(), $user);
         }
 
-        $needle = mb_strtolower($data['q']);
         $rows = Message::query()
             ->with(['user', 'reactions', 'attachments'])
             ->whereIn('channel_id', $channels->keys())
@@ -136,17 +138,20 @@ class MessageController extends ApiController
         $results = [];
 
         foreach ($rows as $message) {
-            $document = $cipher->decrypt($message->ciphertext);
-            $text = $document ? trim(RichText::plain($document)) : '';
-            $position = mb_stripos(mb_strtolower($text), $needle);
+            $channel = $channels->get($message->channel_id);
+            $snippet = null;
 
-            if ($text === '' || $position === false) {
-                continue;
+            if ($message->cipher !== 'e2e') {
+                $document = $cipher->decrypt($message->ciphertext);
+                $text = $document ? trim(RichText::plain($document)) : '';
+
+                if ($text === '') {
+                    continue;
+                }
+
+                $snippet = mb_strimwidth(preg_replace('/\s+/', ' ', $text) ?? '', 0, 150, '…');
             }
 
-            $channel = $channels->get($message->channel_id);
-            $start = max(0, $position - 46);
-            $snippet = ($start > 0 ? '…' : '').mb_substr($text, $start, 150).(mb_strlen($text) > $start + 150 ? '…' : '');
             $others = $channel->members->where('id', '!=', $user->id)->values();
 
             $results[] = [
@@ -162,7 +167,7 @@ class MessageController extends ApiController
                 'snippet' => $snippet,
             ];
 
-            if (count($results) >= 60) {
+            if (count($results) >= 200) {
                 break;
             }
         }
@@ -174,19 +179,17 @@ class MessageController extends ApiController
     {
         $model = $access->find($this->workspace($request), $channel);
         $data = $request->validate([
-            'document' => ['required', 'array'],
+            'sealed' => ['required', 'string', 'max:64000'],
             'parent_id' => ['nullable', 'integer'],
             'attachment_ids' => ['nullable', 'array', 'max:10'],
             'attachment_ids.*' => ['integer'],
         ]);
 
-        $payload = $writer->post(
+        $payload = $writer->postSealed(
             $model,
             $request->user(),
-            $data['document'],
+            $data['sealed'],
             $data['parent_id'] ?? null,
-            null,
-            false,
             $data['attachment_ids'] ?? []
         );
 
@@ -196,9 +199,9 @@ class MessageController extends ApiController
     public function update(Request $request, string $workspace, Message $message, ChannelAccess $access, MessageWriter $writer)
     {
         $this->guardMessage($request, $message, $access);
-        $data = $request->validate(['document' => ['required', 'array']]);
+        $data = $request->validate(['sealed' => ['required', 'string', 'max:64000']]);
 
-        return response()->json($writer->edit($message, $request->user(), $data['document']));
+        return response()->json($writer->editSealed($message, $request->user(), $data['sealed']));
     }
 
     public function destroy(Request $request, string $workspace, Message $message, ChannelAccess $access, MessageWriter $writer)
@@ -212,7 +215,7 @@ class MessageController extends ApiController
         ));
     }
 
-    public function react(Request $request, string $workspace, Message $message, ChannelAccess $access)
+    public function react(Request $request, string $workspace, Message $message, ChannelAccess $access, AblyPublisher $ably)
     {
         $this->guardMessage($request, $message, $access);
         abort_if($message->deleted_at !== null, 422, 'Deleted messages cannot take reactions.');
@@ -236,12 +239,16 @@ class MessageController extends ApiController
             ]);
         }
 
-        $message->load(['user', 'reactions', 'attachments']);
+        $message->load(['user', 'reactions', 'attachments', 'channel']);
         $presenter = app(MessagePresenter::class);
-
-        return response()->json([
+        $payload = [
+            'event' => 'message.reacted',
+            'actor_id' => $request->user()->id,
             'message' => $presenter->present($message, $request->user()),
-        ]);
+        ];
+        $ably->publish($message->channel->workspace_id, $message->channel_id, $payload);
+
+        return response()->json($payload);
     }
 
     private function guardMessage(Request $request, Message $message, ChannelAccess $access): void

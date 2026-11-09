@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import api, { ensureCsrf } from '@/api';
+import { ensureDevice, forgetEncryption } from '@/e2e';
 import { disablePush } from '@/push';
 
 export const useAuthStore = defineStore('auth', {
@@ -12,6 +13,9 @@ export const useAuthStore = defineStore('auth', {
             try {
                 const { data } = await api.get('/me');
                 this.user = data.user;
+                if (data.user?.id) {
+                    await ensureDevice(data.user.id).catch(() => {});
+                }
             } catch {
                 this.user = null;
             } finally {
@@ -29,6 +33,9 @@ export const useAuthStore = defineStore('auth', {
             const { data } = await api.post('/register/verify', payload);
             this.user = data.user;
             this.ready = true;
+            if (data.user?.id) {
+                await ensureDevice(data.user.id).catch(() => {});
+            }
 
             return data.workspace_slug;
         },
@@ -43,6 +50,9 @@ export const useAuthStore = defineStore('auth', {
             const { data } = await api.post('/login', payload);
             this.user = data.user;
             this.ready = true;
+            if (data.user?.id) {
+                await ensureDevice(data.user.id).catch(() => {});
+            }
         },
         async updateProfile(payload) {
             const { data } = await api.patch('/me', payload);
@@ -53,11 +63,15 @@ export const useAuthStore = defineStore('auth', {
         async logout() {
             await disablePush().catch(() => {});
             await api.post('/logout');
+            forgetEncryption();
             this.user = null;
         },
         adopt(user) {
             this.user = user;
             this.ready = true;
+            if (user?.id) {
+                ensureDevice(user.id).catch(() => {});
+            }
         },
     },
 });

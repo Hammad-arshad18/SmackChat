@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import api, { errorText } from '@/api';
+import { searchMessages } from '@/e2e';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
 import { useUiStore } from '@/stores/ui';
@@ -41,9 +42,9 @@ watch(query, (value) => {
     const token = ++searchToken;
     searchTimer = setTimeout(async () => {
         try {
-            const { data } = await api.get(`/workspaces/${office.slug}/search`, { params: { q: needle } });
+            const found = await searchMessages(office, needle);
             if (token === searchToken) {
-                results.value = data.results;
+                results.value = found;
             }
         } catch {
             if (token === searchToken) {

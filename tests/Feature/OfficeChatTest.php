@@ -5,8 +5,10 @@ namespace Tests\Feature;
 use App\Mail\RegistrationCodeMail;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\AblyPublisher;
 use App\Services\WebPushNotifier;
 use App\Services\WorkspaceProvisioner;
+use App\Support\OpaqueId;
 use Base64Url\Base64Url;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -17,11 +19,15 @@ use Minishlink\WebPush\VAPID;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Tests\Support\E2eParty;
 use Tests\TestCase;
 
 class OfficeChatTest extends TestCase
 {
     use RefreshDatabase;
+
+    /** @var array<int, E2eParty> */
+    private array $parties = [];
 
     public function test_messages_are_encrypted_and_direct_messages_stay_private(): void
     {
@@ -36,30 +42,29 @@ class OfficeChatTest extends TestCase
             'user_id' => $other->id,
         ])->assertOk()->json('slug');
 
-        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/{$dm}/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [[
-                        'type' => 'text',
-                        'text' => 'The launch number is 42.',
-                    ]],
-                ]],
-            ],
-        ])->assertCreated()->assertJsonPath('message.text', 'The launch number is 42.');
+        $this->party($other);
+        $sent = $this->party($owner)->send($this, $workspace->slug, $dm, 'The launch number is 42.')
+            ->assertCreated();
+        $this->assertStringNotContainsString('The launch number is 42.', $sent->getContent());
+        $this->assertSame('', $sent->json('message.text'));
+        $this->assertNotEmpty($sent->json('message.sealed'));
 
         $stored = Message::query()->latest('id')->first();
+        $this->assertSame('e2e', $stored->cipher);
         $this->assertStringNotContainsString('The launch number is 42.', $stored->ciphertext);
 
         $this->actingAs($outsider, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/channels/{$dm}/messages")
             ->assertForbidden();
 
-        $this->actingAs($other, 'sanctum')
+        $received = $this->actingAs($other, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/channels/{$dm}/messages")
-            ->assertOk()
-            ->assertJsonPath('messages.0.text', 'The launch number is 42.');
+            ->assertOk();
+        $this->assertStringNotContainsString('The launch number is 42.', $received->getContent());
+        $this->assertSame(
+            'The launch number is 42.',
+            $this->party($other)->plain($this, $workspace->slug, $dm, $received->json('messages.0'))
+        );
     }
 
     public function test_unauthenticated_attachment_access_returns_unauthorized(): void
@@ -83,16 +88,11 @@ class OfficeChatTest extends TestCase
         $this->assertSame('image', $upload['kind']);
         $this->assertNotEmpty($upload['url']);
 
-        $message = $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'Here is the mockup.']],
-                ]],
-            ],
+        $response = $this->party($owner)->send($this, $workspace->slug, 'general', 'Here is the mockup.', [
             'attachment_ids' => [$upload['id']],
-        ])->assertCreated()->json('message');
+        ])->assertCreated();
+        $this->assertStringNotContainsString('Here is the mockup.', $response->getContent());
+        $message = $response->json('message');
 
         $this->assertCount(1, $message['attachments']);
         $this->assertSame('screenshot.png', $message['attachments'][0]['name']);
@@ -109,15 +109,9 @@ class OfficeChatTest extends TestCase
         $workspace = $owner->currentWorkspace;
         app(WorkspaceProvisioner::class)->admit($workspace, $member, 'member');
 
-        $messageId = $this->actingAs($member, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'Please leave this alone.']],
-                ]],
-            ],
-        ])->assertCreated()->json('message.id');
+        $messageId = $this->party($member)->send($this, $workspace->slug, 'general', 'Please leave this alone.')
+            ->assertCreated()
+            ->json('message.id');
 
         $stranger = User::factory()->create();
         app(WorkspaceProvisioner::class)->admit($workspace, $stranger, 'member');
@@ -131,15 +125,9 @@ class OfficeChatTest extends TestCase
             ->assertOk()
             ->assertJsonPath('message.deleted', true);
 
-        $adminMessageId = $this->actingAs($member, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'Admin can clear this.']],
-                ]],
-            ],
-        ])->assertCreated()->json('message.id');
+        $adminMessageId = $this->party($member)->send($this, $workspace->slug, 'general', 'Admin can clear this.')
+            ->assertCreated()
+            ->json('message.id');
 
         $this->actingAs($owner, 'sanctum')
             ->deleteJson("/api/workspaces/{$workspace->slug}/messages/{$adminMessageId}")
@@ -234,15 +222,7 @@ class OfficeChatTest extends TestCase
         $owner = $this->openOffice();
         $workspace = $owner->currentWorkspace;
 
-        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'Keep this decision.']],
-                ]],
-            ],
-        ])->assertCreated();
+        $this->party($owner)->send($this, $workspace->slug, 'general', 'Keep this decision.')->assertCreated();
 
         Message::query()->whereNull('system_type')->update([
             'created_at' => now()->subDays(100),
@@ -259,10 +239,16 @@ class OfficeChatTest extends TestCase
             ->assertOk()
             ->assertJsonPath('monthly_cents', 700);
 
-        $this->actingAs($owner, 'sanctum')
+        $restored = $this->actingAs($owner, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/channels/general/messages")
-            ->assertOk()
-            ->assertJsonFragment(['text' => 'Keep this decision.']);
+            ->assertOk();
+        $this->assertStringNotContainsString('Keep this decision.', $restored->getContent());
+        $kept = collect($restored->json('messages'))
+            ->first(fn (array $message) => $message['cipher'] === 'e2e' && $message['sealed']);
+        $this->assertSame(
+            'Keep this decision.',
+            $this->party($owner)->plain($this, $workspace->slug, 'general', $kept)
+        );
     }
 
     public function test_an_invited_teammate_can_join(): void
@@ -306,35 +292,41 @@ class OfficeChatTest extends TestCase
             'user_id' => $other->id,
         ])->assertOk()->json('slug');
 
-        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/{$dm}/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'The confidential launch code is ORBIT.']],
-                ]],
-            ],
-        ])->assertCreated();
+        $this->party($other);
+        $secret = $this->party($owner)->send($this, $workspace->slug, $dm, 'The confidential launch code is ORBIT.')
+            ->assertCreated()
+            ->json('message');
 
-        $this->actingAs($owner, 'sanctum')
-            ->getJson("/api/workspaces/{$workspace->slug}/search?q=ORBIT")
-            ->assertOk()
-            ->assertJsonPath('results.0.message.text', 'The confidential launch code is ORBIT.');
+        $found = $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/search")
+            ->assertOk();
+        $this->assertStringNotContainsString('ORBIT', $found->getContent());
+        $match = collect($found->json('results'))->first(fn (array $row) => $row['message']['id'] === $secret['id']);
+        $this->assertNotNull($match);
+        $this->assertSame(
+            'The confidential launch code is ORBIT.',
+            $this->party($owner)->plain($this, $workspace->slug, $dm, $match['message'])
+        );
 
-        $this->actingAs($outsider, 'sanctum')
-            ->getJson("/api/workspaces/{$workspace->slug}/search?q=ORBIT")
-            ->assertOk()
-            ->assertJsonCount(0, 'results');
+        $hidden = $this->actingAs($outsider, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/search")
+            ->assertOk();
+        $this->assertStringNotContainsString('ORBIT', $hidden->getContent());
+        $this->assertFalse(collect($hidden->json('results'))->contains(
+            fn (array $row) => $row['message']['id'] === $secret['id']
+        ));
 
         Message::query()->where('channel_id', '!=', $workspace->channels()->where('type', 'attendance')->value('id'))->update([
             'created_at' => now()->subDays(100),
             'updated_at' => now()->subDays(100),
         ]);
 
-        $this->actingAs($owner, 'sanctum')
-            ->getJson("/api/workspaces/{$workspace->slug}/search?q=ORBIT")
-            ->assertOk()
-            ->assertJsonCount(0, 'results');
+        $aged = $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/search")
+            ->assertOk();
+        $this->assertFalse(collect($aged->json('results'))->contains(
+            fn (array $row) => $row['message']['id'] === $secret['id']
+        ));
     }
 
     public function test_owner_manages_roles_and_invitations_and_floor_view_is_private(): void
@@ -392,15 +384,10 @@ class OfficeChatTest extends TestCase
         $workspace = $owner->currentWorkspace;
         app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
 
-        $parent = $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'The laptop will not boot.']],
-                ]],
-            ],
-        ])->assertCreated()->json('message.id');
+        $this->party($worker);
+        $parent = $this->party($owner)->send($this, $workspace->slug, 'general', 'The laptop will not boot.')
+            ->assertCreated()
+            ->json('message.id');
 
         $this->actingAs($owner, 'sanctum')
             ->postJson("/api/workspaces/{$workspace->slug}/channels/general/read")
@@ -408,15 +395,8 @@ class OfficeChatTest extends TestCase
 
         Carbon::setTestNow(now()->addMinute());
 
-        $this->actingAs($worker, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
+        $this->party($worker)->send($this, $workspace->slug, 'general', 'The UI of this app is totally broken.', [
             'parent_id' => $parent,
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'The UI of this app is totally broken.']],
-                ]],
-            ],
         ])->assertCreated();
 
         $general = collect($this->actingAs($owner, 'sanctum')
@@ -426,7 +406,14 @@ class OfficeChatTest extends TestCase
             ->firstWhere('slug', 'general');
 
         $this->assertSame(1, $general['unread']);
-        $this->assertStringContainsString('totally broken', $general['excerpt']);
+        $this->assertStringNotContainsString('totally broken', json_encode($general));
+        $this->assertStringContainsString(
+            'totally broken',
+            $this->party($owner)->plain($this, $workspace->slug, 'general', [
+                'channel_id' => $general['id'],
+                'sealed' => $general['latest_sealed'],
+            ])
+        );
 
         $this->actingAs($owner, 'sanctum')
             ->getJson('/api/push/key')
@@ -463,34 +450,31 @@ class OfficeChatTest extends TestCase
         $workspace = $owner->currentWorkspace;
         app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
 
-        $parent = $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'Please look at the lobby.']],
-                ]],
-            ],
+        $this->party($worker);
+        $parent = $this->party($owner)->send($this, $workspace->slug, 'general', 'Please look at the lobby.')
+            ->assertCreated()
+            ->json('message.id');
+
+        $reply = $this->party($worker)->send($this, $workspace->slug, 'general', 'On my way.', [
+            'parent_id' => $parent,
         ])->assertCreated()->json('message.id');
 
-        $reply = $this->actingAs($worker, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'parent_id' => $parent,
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'On my way.']],
-                ]],
-            ],
-        ])->assertCreated()->json('message.id');
+        $replyRef = OpaqueId::encode($reply);
+
+        $ignored = $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/channels/general/messages?focus={$reply}")
+            ->assertOk()
+            ->json();
+        $this->assertArrayNotHasKey('focus_id', $ignored);
 
         $focused = $this->actingAs($owner, 'sanctum')
-            ->getJson("/api/workspaces/{$workspace->slug}/channels/general/messages?focus={$reply}")
+            ->getJson('/api/workspaces/'.$workspace->slug.'/channels/general/messages?focus='.urlencode($replyRef))
             ->assertOk()
             ->json();
 
         $this->assertSame($parent, $focused['focus_id']);
         $this->assertTrue(collect($focused['messages'])->pluck('id')->contains($parent));
+        $this->assertSame(OpaqueId::encode($parent), collect($focused['messages'])->firstWhere('id', $parent)['ref'] ?? null);
 
         $channel = collect($this->actingAs($owner, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/channels")
@@ -542,15 +526,9 @@ class OfficeChatTest extends TestCase
             ])->assertOk();
         }
 
-        $this->actingAs($worker, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/channels/general/messages", [
-            'document' => [
-                'type' => 'doc',
-                'content' => [[
-                    'type' => 'paragraph',
-                    'content' => [['type' => 'text', 'text' => 'Can you see this on your phone?']],
-                ]],
-            ],
-        ])->assertCreated();
+        $sent = $this->party($worker)->send($this, $workspace->slug, 'general', 'Can you see this on your phone?')
+            ->assertCreated();
+        $this->assertStringNotContainsString('Can you see this on your phone?', $sent->getContent());
 
         $this->assertSame(['https://push.example.test/user/'.$owner->id], $client->urls);
 
@@ -577,6 +555,53 @@ class OfficeChatTest extends TestCase
             ->assertOk()
             ->assertJsonPath('user.name', 'Ada L.')
             ->assertJsonPath('user.status_text', 'Heads down');
+    }
+
+    public function test_reactions_are_broadcast_to_the_conversation(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $message = $this->party($owner)->send($this, $workspace->slug, 'general', 'Ship the homepage.')
+            ->assertCreated()
+            ->json('message');
+
+        $bag = new \stdClass;
+        $bag->events = [];
+        $this->app->instance(AblyPublisher::class, new class($bag) extends AblyPublisher
+        {
+            public function __construct(private object $bag) {}
+
+            public function publish(int $workspaceId, int $channelId, array $payload): void
+            {
+                $this->bag->events[] = $payload;
+            }
+        });
+
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/messages/{$message['id']}/reactions", [
+                'emoji' => '👍',
+            ])
+            ->assertOk()
+            ->assertJsonPath('event', 'message.reacted')
+            ->assertJsonPath('actor_id', $owner->id)
+            ->assertJsonPath('message.reactions.0.emoji', '👍')
+            ->assertJsonPath('message.reactions.0.count', 1);
+
+        $this->assertSame('message.reacted', $bag->events[0]['event'] ?? null);
+        $this->assertSame($message['id'], $bag->events[0]['message']['id'] ?? null);
+        $this->assertStringNotContainsString('Ship the homepage.', json_encode($bag->events[0]));
+    }
+
+    private function party(User $user): E2eParty
+    {
+        if (! isset($this->parties[$user->id])) {
+            $this->actingAs($user, 'sanctum');
+            $this->parties[$user->id] = E2eParty::register($this);
+        }
+
+        $this->actingAs($user, 'sanctum');
+
+        return $this->parties[$user->id];
     }
 
     private function openOffice(): User
