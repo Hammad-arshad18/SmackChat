@@ -18,6 +18,10 @@ const toast = useToast();
 const confirm = useConfirm();
 
 const busy = ref(false);
+const avatarBusy = ref(false);
+const avatarInput = ref(null);
+const logoBusy = ref(false);
+const logoInput = ref(null);
 const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Dubai', 'Europe/London', 'America/New_York'];
 const form = reactive({
     name: '',
@@ -46,7 +50,6 @@ const statusPresets = [
 ];
 
 const locale = Intl.DateTimeFormat().resolvedOptions().locale;
-const initials = computed(() => auth.user.name.slice(0, 1).toUpperCase());
 const roleLabel = computed(() => (office.workspace?.role || 'member').replace(/^\w/, (letter) => letter.toUpperCase()));
 
 function syncForm() {
@@ -69,6 +72,70 @@ async function saveProfile() {
         toast.add({ severity: 'error', summary: 'Profile', detail: errorText(error), life: 3500 });
     } finally {
         busy.value = false;
+    }
+}
+
+async function uploadAvatar(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+        return;
+    }
+
+    avatarBusy.value = true;
+    try {
+        await auth.updateAvatar(file);
+        await office.refreshMembers();
+        toast.add({ severity: 'success', summary: 'Photo updated', detail: 'Your profile picture is saved.', life: 2500 });
+    } catch (error) {
+        toast.add({ severity: 'error', summary: 'Profile photo', detail: errorText(error), life: 3500 });
+    } finally {
+        avatarBusy.value = false;
+    }
+}
+
+async function removeAvatar() {
+    avatarBusy.value = true;
+    try {
+        await auth.removeAvatar();
+        await office.refreshMembers();
+        toast.add({ severity: 'success', summary: 'Photo removed', life: 2200 });
+    } catch (error) {
+        toast.add({ severity: 'error', summary: 'Profile photo', detail: errorText(error), life: 3500 });
+    } finally {
+        avatarBusy.value = false;
+    }
+}
+
+async function uploadLogo(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+        return;
+    }
+
+    logoBusy.value = true;
+    try {
+        await office.updateLogo(file);
+        await auth.fetchMe();
+        toast.add({ severity: 'success', summary: 'Logo updated', detail: 'Company logo has been saved.', life: 2500 });
+    } catch (error) {
+        toast.add({ severity: 'error', summary: 'Company logo', detail: errorText(error), life: 3500 });
+    } finally {
+        logoBusy.value = false;
+    }
+}
+
+async function removeLogo() {
+    logoBusy.value = true;
+    try {
+        await office.removeLogo();
+        await auth.fetchMe();
+        toast.add({ severity: 'success', summary: 'Logo removed', life: 2200 });
+    } catch (error) {
+        toast.add({ severity: 'error', summary: 'Company logo', detail: errorText(error), life: 3500 });
+    } finally {
+        logoBusy.value = false;
     }
 }
 
@@ -144,9 +211,16 @@ function leaveWorkspace() {
                 </header>
 
                 <div class="profile-hero">
-                    <span class="presence-avatar online">
-                        <Avatar :label="initials" shape="circle" size="xlarge" :style="{ background: auth.user.avatar_color, color: '#fff' }" />
-                    </span>
+                    <div class="avatar-editor">
+                        <span class="presence-avatar online">
+                            <PersonAvatar :person="auth.user" :name="auth.user.name" size="xlarge" />
+                        </span>
+                        <div class="avatar-actions">
+                            <input ref="avatarInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden @change="uploadAvatar">
+                            <Button label="Upload photo" icon="pi pi-image" size="small" severity="secondary" :loading="avatarBusy" @click="avatarInput?.click()" />
+                            <Button v-if="auth.user.avatar_url" label="Remove" icon="pi pi-times" size="small" text :disabled="avatarBusy" @click="removeAvatar" />
+                        </div>
+                    </div>
                     <div>
                         <h2>{{ form.name || auth.user.name }}</h2>
                         <p>{{ form.status_emoji }} {{ form.status_text || form.title || 'Available' }}</p>
@@ -254,10 +328,21 @@ function leaveWorkspace() {
                 </header>
 
                 <div class="workspace-identity">
-                    <Avatar :label="office.workspace.name.slice(0, 1)" shape="circle" size="xlarge" class="ws-mark" />
+                    <Avatar
+                        :image="office.workspace.logo_url || undefined"
+                        :label="!office.workspace.logo_url ? office.workspace.name.slice(0, 1) : undefined"
+                        shape="circle"
+                        size="xlarge"
+                        class="ws-mark"
+                    />
                     <div>
                         <strong>{{ office.workspace.name }}</strong>
                         <small>{{ roleLabel }} · {{ office.workspace.seats }} seats · {{ office.workspace.timezone }}</small>
+                        <div v-if="office.manages" class="workspace-logo-actions">
+                            <input ref="logoInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden @change="uploadLogo">
+                            <Button label="Upload company logo" icon="pi pi-image" size="small" severity="secondary" text :loading="logoBusy" @click="logoInput?.click()" />
+                            <Button v-if="office.workspace.logo_url" label="Remove" icon="pi pi-times" size="small" severity="danger" text :disabled="logoBusy" @click="removeLogo" />
+                        </div>
                     </div>
                 </div>
 

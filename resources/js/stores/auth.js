@@ -60,6 +60,20 @@ export const useAuthStore = defineStore('auth', {
 
             return data.user;
         },
+        async updateAvatar(file) {
+            const body = new FormData();
+            body.append('avatar', file);
+            const { data } = await api.post('/me/avatar', body);
+            this.user = data.user;
+
+            return data.user;
+        },
+        async removeAvatar() {
+            const { data } = await api.delete('/me/avatar');
+            this.user = data.user;
+
+            return data.user;
+        },
         async logout() {
             await disablePush().catch(() => {});
             await api.post('/logout');

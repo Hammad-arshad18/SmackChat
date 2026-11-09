@@ -41,17 +41,20 @@ abstract class ApiController extends Controller
             'title' => $user->title,
             'timezone' => $user->timezone,
             'avatar_color' => $user->avatar_color,
+            'avatar_url' => $user->avatarUrl(),
             'status_text' => $user->status_text,
             'status_emoji' => $user->status_emoji,
             'last_seen_at' => optional($user->last_seen_at)?->toIso8601String(),
             'current_workspace' => $current ? [
                 'name' => $current->name,
                 'slug' => $current->slug,
+                'logo_url' => $current->logoUrl(),
             ] : null,
             'workspaces' => $user->workspaces()->orderBy('name')->get()->map(fn (Workspace $workspace) => [
                 'id' => $workspace->id,
                 'name' => $workspace->name,
                 'slug' => $workspace->slug,
+                'logo_url' => $workspace->logoUrl(),
                 'role' => $workspace->pivot->role,
             ])->values()->all(),
         ];

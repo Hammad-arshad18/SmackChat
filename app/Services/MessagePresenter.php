@@ -38,6 +38,7 @@ class MessagePresenter
                 'id' => $message->user->id,
                 'name' => $message->user->name,
                 'avatar_color' => $message->user->avatar_color,
+                'avatar_url' => $message->user->avatarUrl(),
                 'title' => $message->user->title,
             ] : null,
             'document' => $document,

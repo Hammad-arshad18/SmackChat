@@ -137,6 +137,10 @@ class AttendanceService
 
     public function presentDay(AttendanceDay $day): array
     {
+        $standard = (int) config('smackchat.standard_day_minutes', 480);
+        $counted = $this->countedMinutes($day);
+        $portions = $this->calculator->portions($counted, $standard);
+
         return [
             'id' => $day->id,
             'user_id' => $day->user_id,
@@ -152,7 +156,14 @@ class AttendanceService
             'location_verified' => $day->check_in_latitude !== null && $day->check_in_longitude !== null,
             'work_minutes' => (int) ($day->work_minutes ?? 0),
             'break_minutes' => (int) ($day->break_minutes ?? 0),
+            'counted_minutes' => $counted,
+            'regular_minutes' => $portions['regular_minutes'],
+            'overtime_minutes' => $portions['overtime_minutes'],
+            'standard_day_minutes' => $standard,
             'work_label' => Duration::label((int) ($day->work_minutes ?? 0)),
+            'counted_label' => Duration::label($counted),
+            'regular_label' => Duration::label($portions['regular_minutes']),
+            'overtime_label' => Duration::label($portions['overtime_minutes']),
             'break_label' => Duration::label((int) ($day->break_minutes ?? 0)),
             'status' => $day->status,
             'outside_hours' => $day->outside_hours,
@@ -217,6 +228,15 @@ class AttendanceService
         return 2 * $earth * asin(min(1, sqrt($a)));
     }
 
+    private function countedMinutes(AttendanceDay $day): int
+    {
+        if ($day->status === 'completed' || ! $day->relationLoaded('events')) {
+            return (int) ($day->work_minutes ?? 0);
+        }
+
+        return $this->calculator->summarize($day->events, now())['work_minutes'];
+    }
+
     private function event(AttendanceDay $day, string $type, Carbon $at): void
     {
         $day->events()->create([
@@ -243,6 +263,11 @@ class AttendanceService
             'In '.$localIn->format('g:i A').' · out '.$localOut->format('g:i A').'.',
             'Worked '.Duration::label($day->work_minutes).' with '.Duration::label($day->break_minutes).' of breaks.',
         ];
+
+        $overtime = $this->calculator->portions((int) $day->work_minutes)['overtime_minutes'];
+        if ($overtime > 0) {
+            $lines[] = Duration::label($overtime).' of that is overtime, past an 8 hour day. Breaks are not counted.';
+        }
 
         if ($day->holiday_name) {
             $lines[] = 'The office clock marks this as a holiday: '.$day->holiday_name.'.';

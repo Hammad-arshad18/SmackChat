@@ -22,4 +22,18 @@ class AttendanceCalculatorTest extends TestCase
         $this->assertSame(465, $totals['work_minutes']);
         $this->assertSame(30, $totals['break_minutes']);
     }
+
+    public function test_work_past_eight_hours_is_overtime_and_breaks_are_not(): void
+    {
+        $calculator = new AttendanceCalculator;
+
+        $this->assertSame(
+            ['regular_minutes' => 480, 'overtime_minutes' => 0],
+            $calculator->portions(480),
+        );
+        $this->assertSame(
+            ['regular_minutes' => 480, 'overtime_minutes' => 45],
+            $calculator->portions(525),
+        );
+    }
 }

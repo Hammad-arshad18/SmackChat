@@ -78,7 +78,7 @@ class AttendanceController extends ApiController
         ]);
     }
 
-    public function export(Request $request)
+    public function export(Request $request, AttendanceService $attendance)
     {
         $this->requireManager($request);
         [$start, $end] = $this->range($request);
@@ -86,11 +86,12 @@ class AttendanceController extends ApiController
         $rows = $this->query($request, $start, $end)->get();
         $filename = 'attendance-'.$workspace->slug.'-'.$start->format('Y-m').'.csv';
 
-        return response()->streamDownload(function () use ($rows, $workspace) {
+        return response()->streamDownload(function () use ($rows, $workspace, $attendance) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['Employee', 'Email', 'Date', 'Weekday', 'Check in', 'Check out', 'Worked', 'Breaks', 'Status', 'Notes']);
+            fputcsv($out, ['Employee', 'Email', 'Date', 'Weekday', 'Check in', 'Check out', 'Worked', 'Regular', 'Overtime', 'Breaks', 'Status', 'Notes']);
 
             foreach ($rows as $day) {
+                $presented = $attendance->presentDay($day);
                 $notes = collect([
                     $day->holiday_name ? 'Holiday: '.$day->holiday_name : null,
                     $day->non_working_day ? 'Outside the working week' : null,
@@ -104,7 +105,9 @@ class AttendanceController extends ApiController
                     $day->work_date->copy()->timezone($workspace->timezone)->format('l'),
                     optional($day->check_in_at)?->copy()->timezone($workspace->timezone)->format('Y-m-d H:i'),
                     optional($day->check_out_at)?->copy()->timezone($workspace->timezone)->format('Y-m-d H:i'),
-                    $this->hours($day->work_minutes),
+                    $this->hours($presented['counted_minutes']),
+                    $this->hours($presented['regular_minutes']),
+                    $this->hours($presented['overtime_minutes']),
                     $this->hours($day->break_minutes),
                     $day->status,
                     $notes,

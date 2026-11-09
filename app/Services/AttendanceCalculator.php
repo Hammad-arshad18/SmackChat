@@ -50,6 +50,22 @@ class AttendanceCalculator
         ];
     }
 
+    /**
+     * Breaks are already out of $workMinutes. Time past a standard day is overtime.
+     *
+     * @return array{regular_minutes: int, overtime_minutes: int}
+     */
+    public function portions(int $workMinutes, int $standardMinutes = 480): array
+    {
+        $worked = max($workMinutes, 0);
+        $regular = min($worked, max($standardMinutes, 0));
+
+        return [
+            'regular_minutes' => $regular,
+            'overtime_minutes' => $worked - $regular,
+        ];
+    }
+
     private function minutesBetween(CarbonInterface $start, CarbonInterface $end): int
     {
         if ($end->lessThan($start)) {

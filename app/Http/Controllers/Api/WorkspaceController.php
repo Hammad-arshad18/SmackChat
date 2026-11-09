@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Models\Workspace;
 use App\Services\WorkspaceProvisioner;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class WorkspaceController extends ApiController
 {
@@ -40,9 +43,11 @@ class WorkspaceController extends ApiController
                 'id' => $workspace->id,
                 'name' => $workspace->name,
                 'slug' => $workspace->slug,
+                'logo_url' => $workspace->logoUrl(),
                 'timezone' => $workspace->timezone,
                 'plan' => $workspace->plan,
                 'role' => $this->membership($request)->role,
+                'standard_day_minutes' => (int) config('smackchat.standard_day_minutes', 480),
                 'retention_days' => config('smackchat.retention_days'),
                 'archive_price_cents' => config('smackchat.archive_price_cents'),
                 'seats' => $seats,
@@ -70,5 +75,49 @@ class WorkspaceController extends ApiController
         $this->workspace($request)->update($data);
 
         return $this->show($request);
+    }
+
+    public function updateLogo(Request $request)
+    {
+        $this->requireManager($request);
+        $data = $request->validate([
+            'logo' => ['required', 'file', 'image', 'mimes:jpg,jpeg,png,webp,gif', 'max:5120'],
+        ]);
+
+        $workspace = $this->workspace($request);
+        $this->deleteLogo($workspace);
+        $file = $data['logo'];
+        $extension = strtolower($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'jpg');
+        $path = $file->storeAs('logos/'.$workspace->id, Str::uuid()->toString().'.'.$extension, 'local');
+        $workspace->forceFill(['logo_path' => $path])->save();
+
+        return $this->show($request);
+    }
+
+    public function destroyLogo(Request $request)
+    {
+        $this->requireManager($request);
+        $workspace = $this->workspace($request);
+        $this->deleteLogo($workspace);
+        $workspace->forceFill(['logo_path' => null])->save();
+
+        return $this->show($request);
+    }
+
+    public function logo(Request $request)
+    {
+        $workspace = $this->workspace($request);
+        abort_unless($workspace->logo_path && Storage::disk('local')->exists($workspace->logo_path), 404);
+
+        return Storage::disk('local')->response($workspace->logo_path, null, [
+            'Cache-Control' => 'private, max-age=86400',
+        ]);
+    }
+
+    private function deleteLogo(Workspace $workspace): void
+    {
+        if ($workspace->logo_path) {
+            Storage::disk('local')->delete($workspace->logo_path);
+        }
     }
 }

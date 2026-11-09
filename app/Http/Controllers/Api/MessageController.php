@@ -220,9 +220,8 @@ class MessageController extends ApiController
         $this->guardMessage($request, $message, $access);
         abort_if($message->deleted_at !== null, 422, 'Deleted messages cannot take reactions.');
 
-        $allowed = ['👍', '❤️', '😄', '🎉', '✅', '👀', '🚀', '🔥'];
         $data = $request->validate([
-            'emoji' => ['required', 'string', 'in:'.implode(',', $allowed)],
+            'emoji' => ['required', 'string', 'max:16'],
         ]);
 
         $existing = $message->reactions()

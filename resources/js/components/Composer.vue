@@ -9,6 +9,7 @@ import Mention from '@tiptap/extension-mention';
 import { useToast } from 'primevue/usetoast';
 import api, { errorText } from '@/api';
 import { useOfficeStore } from '@/stores/office';
+import EmojiPicker from '@/components/EmojiPicker.vue';
 
 const props = defineProps({
     placeholder: { type: String, default: 'Write a message' },
@@ -403,16 +404,14 @@ onBeforeUnmount(() => {
                 :class="{ active: index === mentionIndex }"
                 @mousedown.prevent="choose(index)"
             >
-                <Avatar :label="item.name.slice(0, 1)" shape="circle" :style="{ background: item.avatar_color, color: '#fff' }" />
+                <PersonAvatar :person="item" />
                 <span>{{ item.name }}</span>
                 <small>{{ item.title || 'Teammate' }}</small>
             </button>
         </div>
 
         <Popover ref="emojiPop">
-            <div class="emoji-grid">
-                <button v-for="emoji in emojis" :key="emoji" type="button" @click="insertEmoji(emoji)">{{ emoji }}</button>
-            </div>
+            <EmojiPicker @select="insertEmoji" />
         </Popover>
 
         <Popover ref="linkPop">

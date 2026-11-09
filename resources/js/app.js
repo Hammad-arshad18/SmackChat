@@ -56,6 +56,7 @@ import ToggleSwitch from 'primevue/toggleswitch';
 import Toolbar from 'primevue/toolbar';
 import 'primeicons/primeicons.css';
 
+import PersonAvatar from './components/PersonAvatar.vue';
 import App from './App.vue';
 import { registerWorker } from './push';
 import router from './router';
@@ -114,6 +115,7 @@ const components = {
     MultiSelect,
     OverlayBadge,
     Password,
+    PersonAvatar,
     Popover,
     ProgressBar,
     ScrollPanel,

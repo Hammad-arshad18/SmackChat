@@ -67,7 +67,10 @@ class InvitationController extends ApiController
 
         $provisioner->admit($invitation->workspace, $user, $invitation->role);
         $invitation->forceFill(['accepted_at' => now()])->save();
-        $user->forceFill(['current_workspace_id' => $invitation->workspace_id])->save();
+        $user->forceFill([
+            'current_workspace_id' => $invitation->workspace_id,
+            'last_seen_at' => now(),
+        ])->saveQuietly();
 
         return response()->json([
             'user' => $this->userPayload($user->fresh()),

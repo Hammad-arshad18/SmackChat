@@ -309,7 +309,7 @@ async function useMyLocation() {
                 <div v-if="liveRows.length" class="live-list">
                     <div v-for="row in liveRows" :key="row.id" class="live-row">
                         <span class="presence-avatar online">
-                            <Avatar :label="(row.user_name || '?').slice(0, 1)" shape="circle" :style="{ background: office.members.find((person) => person.id === row.user_id)?.avatar_color || '#0e7c66', color: '#fff' }" />
+                            <PersonAvatar :person="office.members.find((person) => person.id === row.user_id)" :name="row.user_name" />
                         </span>
                         <span><strong>{{ row.user_name }}</strong><small>{{ row.status === 'on_break' ? 'On break' : 'Working' }} since {{ row.check_in_at ? new Date(row.check_in_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'today' }}</small></span>
                         <Tag :value="row.status === 'on_break' ? 'Break' : 'Live'" :severity="row.status === 'on_break' ? 'warn' : 'success'" />
@@ -372,14 +372,14 @@ async function useMyLocation() {
                 >
                     <template #option="slotProps">
                         <div class="select-person">
-                            <Avatar :label="slotProps.option.name.slice(0, 1)" shape="circle" :style="{ background: slotProps.option.avatar_color, color: '#fff' }" />
+                            <PersonAvatar :person="slotProps.option" />
                             <span>{{ slotProps.option.name }}</span>
                         </div>
                     </template>
                 </MultiSelect>
                 <div class="access-people">
                     <span v-for="person in office.members.filter((member) => timesheetIds.includes(member.id))" :key="person.id" class="access-chip">
-                        <Avatar :label="person.name.slice(0, 1)" shape="circle" size="small" :style="{ background: person.avatar_color, color: '#fff' }" />
+                        <PersonAvatar :person="person" size="small" />
                         {{ person.name }}
                     </span>
                 </div>

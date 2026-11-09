@@ -12,6 +12,7 @@ class Workspace extends Model
     protected $fillable = [
         'name',
         'slug',
+        'logo_path',
         'owner_id',
         'timezone',
         'work_start',
@@ -73,6 +74,17 @@ class Workspace extends Model
     public function retainsForever(): bool
     {
         return $this->plan === 'archive';
+    }
+
+    public function logoUrl(): ?string
+    {
+        if (! $this->logo_path) {
+            return null;
+        }
+
+        $version = $this->updated_at?->getTimestamp() ?? $this->id;
+
+        return '/api/workspaces/'.$this->slug.'/logo?v='.$version;
     }
 
     public function clockLabel(string $value): string

@@ -77,11 +77,21 @@ async function load(slug) {
     }
 }
 
+function beat() {
+    api.post('/heartbeat').catch(() => {});
+    if (office.slug) {
+        office.refreshMembers().catch(() => {});
+        office.refreshChannels().catch(() => {});
+    }
+}
+
 onMounted(() => {
     load(route.params.slug);
     window.addEventListener('keydown', onGlobalKey);
     window.addEventListener('smack-message', onOfficeMessage);
-    heartbeat = setInterval(() => api.post('/heartbeat').catch(() => {}), 45000);
+    window.addEventListener('focus', beat);
+    beat();
+    heartbeat = setInterval(beat, 30000);
     ensurePush().then((ready) => {
         if (ready) {
             ui.setPreference('desktopNotifications', true);
@@ -106,6 +116,7 @@ watch(() => office.totalUnread, (total) => {
 
 onBeforeUnmount(() => {
     clearInterval(heartbeat);
+    window.removeEventListener('focus', beat);
     window.removeEventListener('keydown', onGlobalKey);
     window.removeEventListener('smack-message', onOfficeMessage);
     document.title = 'SmackChat — your team\'s day, in one place';
@@ -448,7 +459,7 @@ function openNotifications(event) {
                 >
                     <template #option="slotProps">
                         <div class="select-person">
-                            <Avatar :label="slotProps.option.name.slice(0, 1)" shape="circle" :style="{ background: slotProps.option.avatar_color, color: '#fff' }" />
+                            <PersonAvatar :person="slotProps.option" />
                             <span>{{ slotProps.option.name }}</span>
                         </div>
                     </template>
@@ -480,7 +491,7 @@ function openNotifications(event) {
                     <template #option="slotProps">
                         <div class="select-person">
                             <span class="presence-avatar" :class="{ online: slotProps.option.online }">
-                                <Avatar :label="slotProps.option.name.slice(0, 1)" shape="circle" :style="{ background: slotProps.option.avatar_color, color: '#fff' }" />
+                                <PersonAvatar :person="slotProps.option" />
                             </span>
                             <span>
                                 <strong>{{ slotProps.option.name }}</strong>
@@ -512,7 +523,12 @@ function openNotifications(event) {
                     :class="{ current: item.slug === office.slug }"
                     @click="workspaceOpen = false; router.push(`/w/${item.slug}`)"
                 >
-                    <Avatar :label="item.name.slice(0, 1)" shape="circle" :style="{ background: item.slug === office.slug ? '#0e7c66' : '#e4dfd2', color: item.slug === office.slug ? '#fff' : '#25231f' }" />
+                    <Avatar
+                        :image="item.logo_url || undefined"
+                        :label="!item.logo_url ? item.name.slice(0, 1) : undefined"
+                        shape="circle"
+                        :style="{ background: item.slug === office.slug ? '#0e7c66' : '#e4dfd2', color: item.slug === office.slug ? '#fff' : '#25231f' }"
+                    />
                     <span>
                         <strong>{{ item.name }}</strong>
                         <small>{{ item.role }}</small>

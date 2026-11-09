@@ -12,7 +12,7 @@ class ScheduleController extends ApiController
     public function show(Request $request, ScheduleInspector $inspector)
     {
         $workspace = $this->workspace($request);
-        $timesheet = $workspace->channels()->where('type', 'attendance')->with('members:id,name,avatar_color')->first();
+        $timesheet = $workspace->channels()->where('type', 'attendance')->with('members:id,name,avatar_color,avatar_path,updated_at')->first();
 
         return response()->json([
             'schedule' => [
@@ -37,6 +37,7 @@ class ScheduleController extends ApiController
                         'id' => $user->id,
                         'name' => $user->name,
                         'avatar_color' => $user->avatar_color,
+                        'avatar_url' => $user->avatarUrl(),
                     ])->values(),
                 ] : null,
             ],

@@ -22,6 +22,7 @@ class User extends Authenticatable
         'timezone',
         'title',
         'avatar_color',
+        'avatar_path',
         'status_text',
         'status_emoji',
         'last_seen_at',
@@ -56,7 +57,18 @@ class User extends Authenticatable
 
     public function isOnline(): bool
     {
-        return $this->last_seen_at !== null && $this->last_seen_at->gt(now()->subMinutes(2));
+        return $this->last_seen_at !== null && $this->last_seen_at->gt(now()->subMinutes(3)->subSeconds(30));
+    }
+
+    public function avatarUrl(): ?string
+    {
+        if (! $this->avatar_path) {
+            return null;
+        }
+
+        $version = $this->updated_at?->getTimestamp() ?? $this->id;
+
+        return '/api/avatars/'.$this->id.'?v='.$version;
     }
 
     public static function colorFor(string $email): string

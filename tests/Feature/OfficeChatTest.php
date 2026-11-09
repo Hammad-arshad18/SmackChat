@@ -15,6 +15,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 use Minishlink\WebPush\VAPID;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
@@ -597,6 +598,65 @@ class OfficeChatTest extends TestCase
             ->assertJsonPath('user.status_text', 'Heads down');
     }
 
+    public function test_a_profile_photo_is_visible_to_teammates_only(): void
+    {
+        Storage::fake('local');
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $stranger = User::factory()->create();
+        $teammate = User::factory()->create();
+        app(WorkspaceProvisioner::class)->admit($workspace, $teammate, 'member');
+
+        $uploaded = $this->actingAs($owner, 'sanctum')
+            ->post('/api/me/avatar', [
+                'avatar' => UploadedFile::fake()->image('ada.jpg', 80, 80),
+            ])
+            ->assertOk();
+
+        $this->assertStringContainsString('/api/avatars/'.$owner->id, (string) $uploaded->json('user.avatar_url'));
+        Storage::disk('local')->assertExists($owner->fresh()->avatar_path);
+
+        $this->actingAs($owner, 'sanctum')->get('/api/avatars/'.$owner->id)->assertOk();
+        $this->actingAs($teammate, 'sanctum')->get('/api/avatars/'.$owner->id)->assertOk();
+        $this->actingAs($stranger, 'sanctum')->get('/api/avatars/'.$owner->id)->assertForbidden();
+
+        $this->actingAs($owner, 'sanctum')
+            ->deleteJson('/api/me/avatar')
+            ->assertOk()
+            ->assertJsonPath('user.avatar_url', null);
+    }
+
+    public function test_hours_past_eight_are_overtime_after_breaks(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-05 09:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-05 12:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-05 12:30:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_out'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-05 18:15:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertOk()
+            ->assertJsonPath('day.work_minutes', 525)
+            ->assertJsonPath('day.regular_minutes', 480)
+            ->assertJsonPath('day.overtime_minutes', 45)
+            ->assertJsonPath('day.break_minutes', 30);
+
+        Carbon::setTestNow();
+
+        $export = $this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11")
+            ->assertOk()
+            ->streamedContent();
+
+        $this->assertStringContainsString('Overtime', $export);
+        $this->assertStringContainsString('0.75', $export);
+    }
+
     public function test_reactions_are_broadcast_to_the_conversation(): void
     {
         $owner = $this->openOffice();
@@ -630,6 +690,32 @@ class OfficeChatTest extends TestCase
         $this->assertSame('message.reacted', $bag->events[0]['event'] ?? null);
         $this->assertSame($message['id'], $bag->events[0]['message']['id'] ?? null);
         $this->assertStringNotContainsString('Ship the homepage.', json_encode($bag->events[0]));
+    }
+
+    public function test_workspace_logo_can_be_uploaded_viewed_and_removed(): void
+    {
+        Storage::fake('local');
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        $file = UploadedFile::fake()->image('logo.png', 200, 200);
+
+        $response = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/logo", [
+                'logo' => $file,
+            ])
+            ->assertOk();
+
+        $this->assertNotNull($response->json('workspace.logo_url'));
+
+        $this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/logo")
+            ->assertOk();
+
+        $this->actingAs($owner, 'sanctum')
+            ->deleteJson("/api/workspaces/{$workspace->slug}/logo")
+            ->assertOk()
+            ->assertJsonPath('workspace.logo_url', null);
     }
 
     private function party(User $user): E2eParty

@@ -14,6 +14,7 @@ class WorkspaceProvisioner
     public function __construct(
         private ChannelAccess $access,
         private MessageWriter $messages,
+        private AblyPublisher $ably,
     ) {}
 
     public function create(User $owner, string $name, ?string $timezone = null): Workspace
@@ -85,6 +86,12 @@ class WorkspaceProvisioner
         foreach ($publicChannels as $channel) {
             $this->access->addMember($channel, $user);
         }
+
+        $this->ably->publishWorkspace($workspace->id, 'member.joined', [
+            'user_id' => $user->id,
+            'name' => $user->name,
+            'role' => $role,
+        ]);
     }
 
     private function slug(string $name): string

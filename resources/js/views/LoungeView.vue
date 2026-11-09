@@ -43,6 +43,7 @@ const weekDays = computed(() => {
 
     return rows;
 });
+const standardMinutes = computed(() => office.workspace?.standard_day_minutes || office.today?.standard_day_minutes || 480);
 const liveWorkMinutes = computed(() => {
     if (!office.today || office.today.status === 'completed') {
         return office.today?.work_minutes || 0;
@@ -50,6 +51,7 @@ const liveWorkMinutes = computed(() => {
 
     return Math.floor(shiftTotals(office.today.events || [], now.value).workSeconds / 60);
 });
+const liveOvertimeMinutes = computed(() => Math.max(0, liveWorkMinutes.value - standardMinutes.value));
 const rowFor = (date) => myRows.value.find((row) => row.work_date === isoDate(date));
 const minutesFor = (date) => {
     const row = rowFor(date);
@@ -65,6 +67,13 @@ const minutesFor = (date) => {
     return row.work_minutes || 0;
 };
 const weekMinutes = computed(() => weekDays.value.reduce((total, date) => total + minutesFor(date), 0));
+const weekOvertime = computed(() => weekDays.value.reduce((total, date) => {
+    if (isoDate(date) === isoDate() && office.today && office.today.status !== 'completed') {
+        return total + liveOvertimeMinutes.value;
+    }
+
+    return total + (rowFor(date)?.overtime_minutes || 0);
+}, 0));
 const weekDaysWorked = computed(() => weekDays.value.filter((date) => minutesFor(date) > 0).length);
 const monthMinutes = computed(() => myRows.value.reduce((total, row) => total + (row.work_minutes || 0), 0) + (office.today && office.today.status !== 'completed' ? liveWorkMinutes.value : 0));
 const expectedWeekMinutes = computed(() => (office.workspace?.work_days?.length || 5) * 8 * 60);
@@ -118,15 +127,27 @@ const nextHoliday = computed(() => {
 
 const summary = computed(() => {
     if (office.today?.status === 'open') {
+        if (liveOvertimeMinutes.value > 0) {
+            return `You're past an 8 hour day, with ${minutesLabel(liveOvertimeMinutes.value)} of overtime. Breaks are not counted.`;
+        }
+
         return `You're on the clock with ${minutesLabel(liveWorkMinutes.value)} in the tank. Make the day count.`;
     }
 
     if (office.today?.status === 'on_break') {
+        if (liveOvertimeMinutes.value > 0) {
+            return `You are on a break, with ${minutesLabel(liveOvertimeMinutes.value)} of overtime already earned.`;
+        }
+
         return 'You are on a break. The floor clock is paused — enjoy it.';
     }
 
     if (office.today?.status === 'completed') {
-        return `Your shift is filed: ${office.today.work_label} of work. Here is what is moving across the workspace.`;
+        const overtime = office.today.overtime_minutes || 0;
+
+        return overtime > 0
+            ? `Your shift is filed: ${office.today.work_label} of work, including ${office.today.overtime_label} of overtime.`
+            : `Your shift is filed: ${office.today.work_label} of work. Here is what is moving across the workspace.`;
     }
 
     if (office.today?.holiday_name) {
@@ -212,7 +233,7 @@ async function startDm(person) {
                 <div v-if="online.length" class="pulse-list">
                     <button v-for="person in online.slice(0, 5)" :key="person.id" type="button" class="pulse-row" @click="startDm(person)">
                         <span class="presence-avatar online">
-                            <Avatar :label="person.name.slice(0, 1)" shape="circle" :style="{ background: person.avatar_color, color: '#fff' }" />
+                            <PersonAvatar :person="person" />
                         </span>
                         <span>
                             <strong>{{ person.name }}</strong>
@@ -279,6 +300,7 @@ async function startDm(person) {
                 </div>
                 <div class="week-foot">
                     <span><strong>{{ weekDaysWorked }}</strong> day{{ weekDaysWorked === 1 ? '' : 's' }} with hours</span>
+                    <span><strong>{{ minutesLabel(weekOvertime) }}</strong> overtime</span>
                     <span><strong>{{ minutesLabel(monthMinutes) }}</strong> this month</span>
                     <button type="button" class="text-link" @click="router.push(`/w/${office.slug}/attendance`)">Attendance <i class="pi pi-arrow-right" /></button>
                 </div>

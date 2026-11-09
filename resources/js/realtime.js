@@ -13,7 +13,7 @@ export function realtimeConnected() {
     return client !== null;
 }
 
-export function bindOffice(workspaceId, channels, userId, onMessage, onShift) {
+export function bindOffice(workspaceId, channels, userId, onMessage, onShift, onWorkspaceEvent) {
     stopRealtime();
 
     ready = api.get('/realtime/token').then(({ data }) => {
@@ -40,8 +40,29 @@ export function bindOffice(workspaceId, channels, userId, onMessage, onShift) {
             subscriptions.push(() => shift.unsubscribe('shift', handler));
         }
 
+        if (onWorkspaceEvent) {
+            const wsEvents = client.channels.get(`smackchat:ws:${workspaceId}:events`);
+            const handler = (message) => onWorkspaceEvent(message.name, message.data);
+            wsEvents.subscribe(handler);
+            subscriptions.push(() => wsEvents.unsubscribe(handler));
+        }
+
         return true;
     }).catch(() => false);
+}
+
+export function subscribeChannel(workspaceId, channelId, onMessage) {
+    if (!client) {
+        return () => {};
+    }
+
+    const realtime = client.channels.get(`smackchat:ws:${workspaceId}:ch:${channelId}`);
+    const handler = (message) => onMessage(message.data);
+    realtime.subscribe('message', handler);
+    const unsubscribe = () => realtime.unsubscribe('message', handler);
+    subscriptions.push(unsubscribe);
+
+    return unsubscribe;
 }
 
 export function publishTyping(workspaceId, channelId, payload) {
