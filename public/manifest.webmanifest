@@ -5,7 +5,7 @@
   "description": "Your team's day in one place — chat, attendance, and schedules for the office.",
   "lang": "en",
   "dir": "ltr",
-  "start_url": "/login",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",

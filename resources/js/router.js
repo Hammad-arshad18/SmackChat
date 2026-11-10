@@ -5,7 +5,14 @@ import { applySeo, DEFAULT_DESCRIPTION, DEFAULT_TITLE } from '@/seo';
 const router = createRouter({
     history: createWebHistory(),
     routes: [
-        { path: '/', redirect: '/app' },
+        {
+            path: '/',
+            component: () => import('@/views/LandingView.vue'),
+            meta: {
+                title: 'SmackChat — your team\'s day, in one place',
+                description: 'Office chat for one company: encrypted channels and DMs, a floor clock that files timesheets, attendance heatmaps, and Forever archive when history must last.',
+            },
+        },
         {
             path: '/login',
             component: () => import('@/views/AuthView.vue'),

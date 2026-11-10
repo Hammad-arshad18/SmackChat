@@ -1,13 +1,13 @@
 <script setup>
 import { computed, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { errorText } from '@/api';
 
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const mode = ref('login');
+const mode = ref(route.query.mode === 'register' ? 'register' : 'login');
 const step = ref('form');
 const modes = [
     { label: 'Log in', value: 'login' },
@@ -97,8 +97,10 @@ function demo(email) {
     <div class="auth-page">
         <section class="auth-story">
             <div class="auth-brand">
-                <span class="brand-mark"><i class="pi pi-comment" /></span>
-                <span class="brand-word">smack<span class="brand-dot">.</span></span>
+                <RouterLink to="/" class="auth-brand-link">
+                    <span class="brand-mark"><i class="pi pi-comment" /></span>
+                    <span class="brand-word">smack<span class="brand-dot">.</span></span>
+                </RouterLink>
                 <span class="auth-brand-note">Team chat, with a clock</span>
             </div>
 
