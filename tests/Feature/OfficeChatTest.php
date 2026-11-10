@@ -829,7 +829,11 @@ class OfficeChatTest extends TestCase
         $details = openssl_pkey_get_details($key);
 
         return [
-            'public' => Base64Url::encode("\x04".$details['ec']['x'].$details['ec']['y']),
+            'public' => Base64Url::encode(
+                "\x04"
+                .str_pad($details['ec']['x'], 32, "\0", STR_PAD_LEFT)
+                .str_pad($details['ec']['y'], 32, "\0", STR_PAD_LEFT)
+            ),
             'auth' => Base64Url::encode(random_bytes(16)),
         ];
     }
