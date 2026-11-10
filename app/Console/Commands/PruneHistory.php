@@ -2,8 +2,11 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Attachment;
 use App\Models\Message;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Storage;
 
 class PruneHistory extends Command
 {
@@ -14,17 +17,34 @@ class PruneHistory extends Command
     public function handle(): int
     {
         $cutoff = now()->subDays(config('smackchat.retention_days'));
+        $standard = fn ($query) => $query->where('plan', 'standard');
 
-        $roots = Message::query()
+        $oldRoots = Message::query()
             ->whereNull('parent_id')
             ->where('created_at', '<', $cutoff)
-            ->whereHas('channel.workspace', fn ($query) => $query->where('plan', 'standard'))
-            ->delete();
+            ->whereHas('channel.workspace', $standard)
+            ->pluck('id');
 
-        $replies = Message::query()
+        $oldReplies = Message::query()
+            ->whereNotNull('parent_id')
             ->where('created_at', '<', $cutoff)
-            ->whereHas('channel.workspace', fn ($query) => $query->where('plan', 'standard'))
-            ->delete();
+            ->whereHas('channel.workspace', $standard)
+            ->pluck('id');
+
+        $cascadeReplies = $oldRoots->isEmpty()
+            ? collect()
+            : Message::query()->whereIn('parent_id', $oldRoots)->pluck('id');
+
+        $messageIds = $oldRoots->merge($oldReplies)->merge($cascadeReplies)->unique()->values();
+        $files = $this->forgetAttachmentFiles($messageIds);
+
+        $roots = $oldRoots->isEmpty()
+            ? 0
+            : Message::query()->whereIn('id', $oldRoots)->delete();
+
+        $replies = $oldReplies->isEmpty()
+            ? 0
+            : Message::query()->whereIn('id', $oldReplies)->delete();
 
         Message::query()
             ->whereNull('parent_id')
@@ -37,8 +57,35 @@ class PruneHistory extends Command
                 ]);
             });
 
-        $this->info('Pruned '.$roots.' conversations and '.$replies.' older replies.');
+        $this->info('Pruned '.$roots.' conversations, '.$replies.' older replies, and '.$files.' attachment files.');
 
         return self::SUCCESS;
+    }
+
+    /**
+     * @param  Collection<int, int>  $messageIds
+     */
+    private function forgetAttachmentFiles($messageIds): int
+    {
+        if ($messageIds->isEmpty()) {
+            return 0;
+        }
+
+        $removed = 0;
+
+        Attachment::query()
+            ->whereIn('message_id', $messageIds)
+            ->get(['disk', 'path'])
+            ->each(function (Attachment $attachment) use (&$removed) {
+                if ($attachment->path === '' || $attachment->path === null) {
+                    return;
+                }
+
+                if (Storage::disk($attachment->disk)->delete($attachment->path)) {
+                    $removed++;
+                }
+            });
+
+        return $removed;
     }
 }
