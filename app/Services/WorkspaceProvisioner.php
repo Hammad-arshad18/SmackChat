@@ -28,6 +28,7 @@ class WorkspaceProvisioner
             'timezone' => $timezone,
             'work_start' => '09:00:00',
             'work_end' => '17:00:00',
+            'break_allowance_minutes' => 0,
             'work_days' => [1, 2, 3, 4, 5],
             'plan' => 'standard',
         ]);

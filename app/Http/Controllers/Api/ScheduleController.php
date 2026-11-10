@@ -19,6 +19,9 @@ class ScheduleController extends ApiController
                 'timezone' => $workspace->timezone,
                 'work_start' => $workspace->clockLabel($workspace->work_start),
                 'work_end' => $workspace->clockLabel($workspace->work_end),
+                'break_allowance_minutes' => (int) ($workspace->break_allowance_minutes ?? 0),
+                'window_minutes' => $workspace->windowMinutes(),
+                'standard_day_minutes' => $workspace->standardDayMinutes(),
                 'work_days' => array_map('intval', $workspace->work_days ?? []),
                 'location_restricted' => (bool) $workspace->location_restricted,
                 'location_latitude' => $workspace->location_latitude,
@@ -51,6 +54,7 @@ class ScheduleController extends ApiController
             'timezone' => ['required', 'timezone:all'],
             'work_start' => ['required', 'date_format:H:i'],
             'work_end' => ['required', 'date_format:H:i', 'after:work_start'],
+            'break_allowance_minutes' => ['nullable', 'integer', 'min:0', 'max:480'],
             'work_days' => ['required', 'array', 'min:1'],
             'work_days.*' => ['integer', Rule::in([1, 2, 3, 4, 5, 6, 7])],
             'location_restricted' => ['sometimes', 'boolean'],
@@ -60,10 +64,23 @@ class ScheduleController extends ApiController
         ]);
 
         $workspace = $this->workspace($request);
+        $startMinutes = $this->clockMinutes($data['work_start']);
+        $endMinutes = $this->clockMinutes($data['work_end']);
+        $window = max(0, $endMinutes - $startMinutes);
+        $breakAllowance = (int) ($data['break_allowance_minutes'] ?? $workspace->break_allowance_minutes ?? 0);
+
+        if ($breakAllowance > $window) {
+            return response()->json([
+                'message' => 'Break allowance cannot be longer than the office window.',
+                'errors' => ['break_allowance_minutes' => ['Pick a break shorter than the open window.']],
+            ], 422);
+        }
+
         $updates = [
             'timezone' => $data['timezone'],
             'work_start' => $data['work_start'].':00',
             'work_end' => $data['work_end'].':00',
+            'break_allowance_minutes' => $breakAllowance,
             'work_days' => array_values(array_unique(array_map('intval', $data['work_days']))),
         ];
 
@@ -134,5 +151,12 @@ class ScheduleController extends ApiController
         $holiday->delete();
 
         return response()->json(['ok' => true]);
+    }
+
+    private function clockMinutes(string $value): int
+    {
+        [$hour, $minute] = array_map('intval', explode(':', $value));
+
+        return ($hour * 60) + $minute;
     }
 }

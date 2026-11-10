@@ -76,9 +76,9 @@ const weekOvertime = computed(() => weekDays.value.reduce((total, date) => {
 }, 0));
 const weekDaysWorked = computed(() => weekDays.value.filter((date) => minutesFor(date) > 0).length);
 const monthMinutes = computed(() => myRows.value.reduce((total, row) => total + (row.work_minutes || 0), 0) + (office.today && office.today.status !== 'completed' ? liveWorkMinutes.value : 0));
-const expectedWeekMinutes = computed(() => (office.workspace?.work_days?.length || 5) * 8 * 60);
+const expectedWeekMinutes = computed(() => (office.workspace?.work_days?.length || 5) * standardMinutes.value);
 const weekProgress = computed(() => Math.min(100, Math.round((weekMinutes.value / expectedWeekMinutes.value) * 100)));
-const weekMax = computed(() => Math.max(8 * 60, ...weekDays.value.map((date) => minutesFor(date))));
+const weekMax = computed(() => Math.max(standardMinutes.value, ...weekDays.value.map((date) => minutesFor(date))));
 const barHeight = (date) => {
     const minutes = minutesFor(date);
 
@@ -128,7 +128,7 @@ const nextHoliday = computed(() => {
 const summary = computed(() => {
     if (office.today?.status === 'open') {
         if (liveOvertimeMinutes.value > 0) {
-            return `You're past an 8 hour day, with ${minutesLabel(liveOvertimeMinutes.value)} of overtime. Breaks are not counted.`;
+            return `You're past a ${minutesLabel(standardMinutes.value)} day, with ${minutesLabel(liveOvertimeMinutes.value)} of overtime. Breaks are not counted.`;
         }
 
         return `You're on the clock with ${minutesLabel(liveWorkMinutes.value)} in the tank. Make the day count.`;

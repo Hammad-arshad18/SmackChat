@@ -8,7 +8,7 @@ import { disablePush, ensurePush } from '@/push';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
 import { useUiStore } from '@/stores/ui';
-import { timeAgo } from '@/time';
+import { minutesLabel, timeAgo } from '@/time';
 
 const auth = useAuthStore();
 const office = useOfficeStore();
@@ -349,6 +349,8 @@ function leaveWorkspace() {
                 <div class="detail-rows">
                     <div><span>Your role</span><strong>{{ roleLabel }}</strong></div>
                     <div><span>Office hours</span><strong>{{ office.workspace.work_start }}–{{ office.workspace.work_end }}</strong></div>
+                    <div><span>Break allowance</span><strong>{{ office.workspace.break_allowance_minutes ? minutesLabel(office.workspace.break_allowance_minutes) : 'None' }}</strong></div>
+                    <div><span>Expected day</span><strong>{{ minutesLabel(office.workspace.standard_day_minutes || 480) }}</strong></div>
                     <div><span>Working days</span><strong>{{ office.workspace.work_days?.length || 5 }} days a week</strong></div>
                     <div><span>History</span><strong>{{ office.workspace.plan === 'archive' ? 'Kept forever' : `${office.workspace.retention_days} days` }}</strong></div>
                 </div>

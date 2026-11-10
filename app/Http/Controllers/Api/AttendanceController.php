@@ -31,7 +31,7 @@ class AttendanceController extends ApiController
         $date = now()->timezone($workspace->timezone)->toDateString();
 
         $rows = AttendanceDay::query()
-            ->with(['user', 'events'])
+            ->with(['user', 'events', 'workspace'])
             ->where('workspace_id', $workspace->id)
             ->whereDate('work_date', $date)
             ->orderBy('user_id')
@@ -108,7 +108,7 @@ class AttendanceController extends ApiController
                     $this->hours($presented['counted_minutes']),
                     $this->hours($presented['regular_minutes']),
                     $this->hours($presented['overtime_minutes']),
-                    $this->hours($day->break_minutes),
+                    $this->hours($presented['break_minutes']),
                     $day->status,
                     $notes,
                 ]);
@@ -121,7 +121,7 @@ class AttendanceController extends ApiController
     private function query(Request $request, Carbon $start, Carbon $end)
     {
         $query = AttendanceDay::query()
-            ->with(['user', 'events'])
+            ->with(['user', 'events', 'workspace'])
             ->where('workspace_id', $this->workspace($request)->id)
             ->whereBetween('work_date', [$start->toDateString(), $end->toDateString()])
             ->orderBy('work_date')

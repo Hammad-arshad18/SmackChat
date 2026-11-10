@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Mail\RegistrationCodeMail;
+use App\Models\AttendanceDay;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\AblyPublisher;
@@ -655,6 +656,64 @@ class OfficeChatTest extends TestCase
 
         $this->assertStringContainsString('Overtime', $export);
         $this->assertStringContainsString('0.75', $export);
+    }
+
+    public function test_break_allowance_sets_the_expected_work_day(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        $this->actingAs($owner, 'sanctum')->putJson("/api/workspaces/{$workspace->slug}/schedule", [
+            'timezone' => 'Asia/Dubai',
+            'work_start' => '09:00',
+            'work_end' => '18:00',
+            'break_allowance_minutes' => 60,
+            'work_days' => [1, 2, 3, 4, 5],
+        ])
+            ->assertOk()
+            ->assertJsonPath('schedule.break_allowance_minutes', 60)
+            ->assertJsonPath('schedule.window_minutes', 540)
+            ->assertJsonPath('schedule.standard_day_minutes', 480);
+
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}")
+            ->assertOk()
+            ->assertJsonPath('workspace.break_allowance_minutes', 60)
+            ->assertJsonPath('workspace.standard_day_minutes', 480);
+    }
+
+    public function test_completed_days_are_recalculated_from_the_event_timeline(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-09 09:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-09 13:07:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-09 14:05:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_out'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-09 18:05:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertOk()
+            ->assertJsonPath('day.work_minutes', 487)
+            ->assertJsonPath('day.break_minutes', 58)
+            ->assertJsonPath('day.regular_minutes', 480)
+            ->assertJsonPath('day.overtime_minutes', 7);
+
+        $day = AttendanceDay::query()->where('workspace_id', $workspace->id)->firstOrFail();
+        $day->forceFill(['work_minutes' => 521, 'break_minutes' => 58])->saveQuietly();
+
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/attendance?month=2026-11")
+            ->assertOk()
+            ->assertJsonPath('rows.0.work_minutes', 487)
+            ->assertJsonPath('rows.0.break_minutes', 58)
+            ->assertJsonPath('rows.0.overtime_minutes', 7);
+
+        $this->assertSame(487, $day->fresh()->work_minutes);
+
+        Carbon::setTestNow();
     }
 
     public function test_reactions_are_broadcast_to_the_conversation(): void

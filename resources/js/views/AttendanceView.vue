@@ -266,7 +266,7 @@ function inspectRow(row) {
             </div>
             <div class="stat-card">
                 <span class="stat-icon amber"><i class="pi pi-hourglass" /></span>
-                <div><strong>{{ minutesLabel(overtimeMinutes) }}</strong><small>Overtime past 8h</small></div>
+                <div><strong>{{ minutesLabel(overtimeMinutes) }}</strong><small>Overtime past {{ minutesLabel(office.workspace?.standard_day_minutes || 480) }}</small></div>
             </div>
             <div class="stat-card">
                 <span class="stat-icon rose"><i class="pi pi-pause" /></span>

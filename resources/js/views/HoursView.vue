@@ -5,7 +5,7 @@ import { useToast } from 'primevue/usetoast';
 import api, { errorText } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
-import { dateFromTime, formatFullDay, isoDate, timeFromDate, wallClockLabel } from '@/time';
+import { dateFromTime, formatFullDay, isoDate, minutesLabel, timeFromDate, wallClockLabel } from '@/time';
 
 const office = useOfficeStore();
 const auth = useAuthStore();
@@ -30,6 +30,16 @@ const savingWorkspace = ref(false);
 const holidayOpen = ref(false);
 const startTime = ref(dateFromTime('09:00'));
 const endTime = ref(dateFromTime('17:00'));
+const breakAllowance = ref(0);
+const breakOptions = [
+    { label: 'No break', value: 0 },
+    { label: '15 minutes', value: 15 },
+    { label: '30 minutes', value: 30 },
+    { label: '45 minutes', value: 45 },
+    { label: '1 hour', value: 60 },
+    { label: '1 hour 30 minutes', value: 90 },
+    { label: '2 hours', value: 120 },
+];
 const form = reactive({ timezone: 'UTC', work_days: [1, 2, 3, 4, 5] });
 const timesheetIds = ref([]);
 const holiday = reactive({ name: '', observed_on: null, repeats_yearly: false });
@@ -43,6 +53,15 @@ const locationForm = reactive({
 const locating = ref(false);
 
 const today = computed(() => schedule.value?.today);
+const windowMinutes = computed(() => {
+    const start = timeFromDate(startTime.value);
+    const end = timeFromDate(endTime.value);
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+
+    return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+});
+const expectedWorkMinutes = computed(() => Math.max(0, windowMinutes.value - (breakAllowance.value || 0)));
 const nextHoliday = computed(() => {
     if (!schedule.value?.holidays?.length) return null;
     const todayDate = new Date();
@@ -88,6 +107,7 @@ function applySchedule(next) {
     form.work_days = [...next.work_days];
     startTime.value = dateFromTime(next.work_start);
     endTime.value = dateFromTime(next.work_end);
+    breakAllowance.value = next.break_allowance_minutes ?? 0;
     timesheetIds.value = next.timesheet?.members.map((person) => person.id) || [];
     locationForm.location_restricted = !!next.location_restricted;
     locationForm.location_latitude = next.location_latitude ?? null;
@@ -102,6 +122,7 @@ async function save() {
             timezone: form.timezone,
             work_start: timeFromDate(startTime.value),
             work_end: timeFromDate(endTime.value),
+            break_allowance_minutes: breakAllowance.value,
             work_days: form.work_days,
             location_restricted: locationForm.location_restricted,
             location_latitude: locationForm.location_latitude,
@@ -283,6 +304,19 @@ async function useMyLocation() {
                 </div>
 
                 <div class="field">
+                    <label>Break allowance</label>
+                    <Select
+                        v-model="breakAllowance"
+                        :options="breakOptions"
+                        option-label="label"
+                        option-value="value"
+                        :disabled="!canEdit"
+                        fluid
+                    />
+                    <small class="fine">Deducted from the open window for overtime. 9:00–18:00 with 1 hour break expects {{ minutesLabel(8 * 60) }}.</small>
+                </div>
+
+                <div class="field">
                     <label>Timezone</label>
                     <Select v-model="form.timezone" :options="zones" filter :disabled="!canEdit" fluid />
                 </div>
@@ -290,14 +324,19 @@ async function useMyLocation() {
                 <div class="week-preview">
                     <div>
                         <span class="card-kicker">Preview</span>
-                        <p>{{ form.work_days.length }} day{{ form.work_days.length === 1 ? '' : 's' }} a week · {{ wallClockLabel(timeFromDate(startTime)) }}–{{ wallClockLabel(timeFromDate(endTime)) }}</p>
+                        <p>
+                            {{ form.work_days.length }} day{{ form.work_days.length === 1 ? '' : 's' }} a week
+                            · {{ wallClockLabel(timeFromDate(startTime)) }}–{{ wallClockLabel(timeFromDate(endTime)) }}
+                            · {{ minutesLabel(expectedWorkMinutes) }} expected
+                            <template v-if="breakAllowance"> after {{ minutesLabel(breakAllowance) }} break</template>
+                        </p>
                     </div>
                     <span class="preview-days">
                         <i v-for="day in days" :key="day.value" :class="{ on: form.work_days.includes(day.value) }">{{ day.label.slice(0, 1) }}</i>
                     </span>
                 </div>
 
-                <p class="fine">Shifts outside this window are flagged but can still be filed. Holidays are captured separately.</p>
+                <p class="fine">Punched breaks still come off worked time. The allowance only sets the expected day used for overtime. Shifts outside this window are flagged but can still be filed.</p>
             </section>
 
             <section class="panel live-panel">

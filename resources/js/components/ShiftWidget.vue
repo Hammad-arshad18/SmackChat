@@ -17,15 +17,8 @@ let timer;
 
 const status = computed(() => office.today?.status || 'idle');
 const totals = computed(() => shiftTotals(office.today?.events || [], tick.value));
-const scheduledMinutes = computed(() => {
-    const start = office.workspace?.work_start || '09:00';
-    const end = office.workspace?.work_end || '17:00';
-    const [sh, sm] = start.split(':').map(Number);
-    const [eh, em] = end.split(':').map(Number);
-
-    return Math.max(60, (eh * 60 + em) - (sh * 60 + sm));
-});
 const standardMinutes = computed(() => office.workspace?.standard_day_minutes || office.today?.standard_day_minutes || 480);
+const scheduledMinutes = computed(() => Math.max(60, office.workspace?.window_minutes || standardMinutes.value));
 const workedMinutes = computed(() => {
     if (status.value === 'completed') {
         return office.today?.work_minutes || 0;

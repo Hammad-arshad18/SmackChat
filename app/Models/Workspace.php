@@ -17,6 +17,7 @@ class Workspace extends Model
         'timezone',
         'work_start',
         'work_end',
+        'break_allowance_minutes',
         'work_days',
         'location_restricted',
         'location_latitude',
@@ -31,6 +32,7 @@ class Workspace extends Model
     {
         return [
             'work_days' => 'array',
+            'break_allowance_minutes' => 'integer',
             'location_restricted' => 'boolean',
             'location_latitude' => 'float',
             'location_longitude' => 'float',
@@ -90,5 +92,30 @@ class Workspace extends Model
     public function clockLabel(string $value): string
     {
         return substr((string) $value, 0, 5);
+    }
+
+    public function windowMinutes(): int
+    {
+        return max(0, $this->clockMinutes($this->work_end) - $this->clockMinutes($this->work_start));
+    }
+
+    public function standardDayMinutes(): int
+    {
+        $fallback = (int) config('smackchat.standard_day_minutes', 480);
+        $window = $this->windowMinutes();
+
+        if ($window <= 0) {
+            return $fallback;
+        }
+
+        return max(0, $window - max(0, (int) ($this->break_allowance_minutes ?? 0)));
+    }
+
+    private function clockMinutes(?string $value): int
+    {
+        $clock = $this->clockLabel((string) ($value ?: '00:00'));
+        [$hour, $minute] = array_map('intval', explode(':', $clock.':0'));
+
+        return ($hour * 60) + $minute;
     }
 }

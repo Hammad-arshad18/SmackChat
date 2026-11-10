@@ -19,7 +19,7 @@ class AttendanceCalculator
         $openWork = null;
         $openBreak = null;
 
-        foreach ($events->sortBy(fn ($event) => Carbon::parse($event->happened_at)->getTimestamp()) as $event) {
+        foreach ($events->sortBy(fn ($event) => Carbon::parse($event->happened_at)->getTimestamp())->values() as $event) {
             $at = Carbon::parse($event->happened_at);
 
             if ($event->type === 'check_in') {
@@ -33,6 +33,14 @@ class AttendanceCalculator
                 $break += $this->minutesBetween($openBreak, $at);
                 $openBreak = null;
                 $openWork = $at;
+            } elseif ($event->type === 'check_out') {
+                if ($openBreak) {
+                    $break += $this->minutesBetween($openBreak, $at);
+                    $openBreak = null;
+                } elseif ($openWork) {
+                    $work += $this->minutesBetween($openWork, $at);
+                    $openWork = null;
+                }
             }
         }
 
@@ -68,10 +76,10 @@ class AttendanceCalculator
 
     private function minutesBetween(CarbonInterface $start, CarbonInterface $end): int
     {
-        if ($end->lessThan($start)) {
+        if ($end->lessThanOrEqualTo($start)) {
             return 0;
         }
 
-        return (int) round($start->diffInMinutes($end));
+        return intdiv((int) $start->diffInSeconds($end, true), 60);
     }
 }
