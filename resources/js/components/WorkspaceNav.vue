@@ -111,7 +111,12 @@ function toggleUserMenu(event) {
         </div>
 
         <button type="button" class="ws-switcher" @click="emit('workspaces')">
-            <Avatar :label="initials" shape="circle" class="ws-avatar" />
+            <Avatar
+                :image="office.workspace.logo_url || undefined"
+                :label="!office.workspace.logo_url ? initials : undefined"
+                shape="circle"
+                class="ws-avatar"
+            />
             <span class="ws-copy">
                 <strong>{{ office.workspace.name }}</strong>
                 <small>{{ roleLabel }} · {{ office.members.length }} people</small>
@@ -228,10 +233,10 @@ function toggleUserMenu(event) {
                     @click="openChannel(channel.slug)"
                 >
                     <span class="presence-avatar" :class="{ online: online(channel) }">
-                        <Avatar
-                            :label="(channel.people[0]?.name || '?').slice(0, 1)"
-                            shape="circle"
-                            :style="{ background: channel.people[0]?.avatar_color || '#0e7c66', color: '#fff' }"
+                        <PersonAvatar
+                            :person="channel.people[0]"
+                            :name="channel.people[0]?.name || channel.label"
+                            color="#0e7c66"
                         />
                     </span>
                     <span class="conv-copy">
@@ -252,7 +257,7 @@ function toggleUserMenu(event) {
 
         <div class="user-chip">
             <span class="presence-avatar online">
-                <Avatar :label="auth.user.name.slice(0, 1)" shape="circle" :style="{ background: auth.user.avatar_color, color: '#fff' }" />
+                <PersonAvatar :person="auth.user" />
             </span>
             <span class="user-copy">
                 <strong>{{ auth.user.name }}</strong>

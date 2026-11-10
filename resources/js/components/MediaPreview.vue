@@ -94,6 +94,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
         v-model:visible="visible"
         modal
         dismissable-mask
+        :closable="false"
         class="media-preview-dialog"
         :style="{ width: 'min(96vw, 1080px)', maxWidth: '96vw' }"
     >

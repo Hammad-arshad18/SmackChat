@@ -23,11 +23,12 @@ class MemberController extends ApiController
             'title' => $user->title,
             'role' => $user->pivot->role,
             'avatar_color' => $user->avatar_color,
+            'avatar_url' => $user->avatarUrl(),
             'status_text' => $user->status_text,
             'status_emoji' => $user->status_emoji,
             'last_seen_at' => optional($user->last_seen_at)?->toIso8601String(),
             'joined_at' => optional($user->pivot->created_at)?->toIso8601String(),
-            'online' => $user->isOnline(),
+            'online' => $user->id === $request->user()?->id ? true : $user->isOnline(),
         ]);
 
         $invitations = $workspace->invitations()

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\AblyPublisher;
 use App\Services\ChannelAccess;
 use App\Services\MessageCipher;
 use App\Support\RichText;
@@ -20,7 +21,7 @@ class ChannelController extends ApiController
         $user = $request->user();
 
         $channels = Channel::query()
-            ->with('members:id,name,avatar_color')
+            ->with('members:id,name,avatar_color,avatar_path,updated_at')
             ->where('workspace_id', $workspace->id)
             ->where(function ($query) use ($user) {
                 $query->where('type', Channel::PUBLIC)
@@ -94,6 +95,7 @@ class ChannelController extends ApiController
                     'id' => $person->id,
                     'name' => $person->name,
                     'avatar_color' => $person->avatar_color,
+                    'avatar_url' => $person->avatarUrl(),
                 ])->values()->all(),
                 'member_ids' => $channel->members->pluck('id')->values()->all(),
             ];
@@ -102,7 +104,7 @@ class ChannelController extends ApiController
         return response()->json(['channels' => $payload]);
     }
 
-    public function store(Request $request, ChannelAccess $access)
+    public function store(Request $request, ChannelAccess $access, AblyPublisher $ably)
     {
         $workspace = $this->workspace($request);
         $data = $request->validate([
@@ -141,6 +143,8 @@ class ChannelController extends ApiController
         $channel->members()->sync(collect($memberIds)->mapWithKeys(fn ($id) => [
             $id => ['last_read_at' => now()],
         ])->all());
+
+        $ably->publishWorkspace($workspace->id, 'channel.created', ['channel_id' => $channel->id]);
 
         return response()->json(['slug' => $channel->slug], 201);
     }
@@ -223,7 +227,7 @@ class ChannelController extends ApiController
         return response()->json(['ok' => true]);
     }
 
-    public function direct(Request $request, ChannelAccess $access)
+    public function direct(Request $request, ChannelAccess $access, AblyPublisher $ably)
     {
         $workspace = $this->workspace($request);
         $data = $request->validate([
@@ -252,6 +256,7 @@ class ChannelController extends ApiController
             ]);
             $access->addMember($channel, $request->user());
             $access->addMember($channel, $other);
+            $ably->publishWorkspace($workspace->id, 'channel.created', ['channel_id' => $channel->id]);
         }
 
         return response()->json(['slug' => $channel->slug]);

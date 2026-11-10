@@ -17,14 +17,8 @@ let timer;
 
 const status = computed(() => office.today?.status || 'idle');
 const totals = computed(() => shiftTotals(office.today?.events || [], tick.value));
-const scheduledMinutes = computed(() => {
-    const start = office.workspace?.work_start || '09:00';
-    const end = office.workspace?.work_end || '17:00';
-    const [sh, sm] = start.split(':').map(Number);
-    const [eh, em] = end.split(':').map(Number);
-
-    return Math.max(60, (eh * 60 + em) - (sh * 60 + sm));
-});
+const standardMinutes = computed(() => office.workspace?.standard_day_minutes || office.today?.standard_day_minutes || 480);
+const scheduledMinutes = computed(() => Math.max(60, office.workspace?.window_minutes || standardMinutes.value));
 const workedMinutes = computed(() => {
     if (status.value === 'completed') {
         return office.today?.work_minutes || 0;
@@ -32,6 +26,7 @@ const workedMinutes = computed(() => {
 
     return Math.floor(totals.value.workSeconds / 60);
 });
+const overtimeMinutes = computed(() => Math.max(0, workedMinutes.value - standardMinutes.value));
 const progress = computed(() => Math.min(100, Math.round((workedMinutes.value / scheduledMinutes.value) * 100)));
 const stateLabel = computed(() => ({
     idle: 'Not checked in',
@@ -49,7 +44,13 @@ const stateDetail = computed(() => {
     }
 
     if (status.value === 'on_break') {
-        return `${durationClock(totals.value.breakSeconds)} on break`;
+        const extra = overtimeMinutes.value > 0 ? ` · ${minutesLabel(overtimeMinutes.value)} overtime` : '';
+
+        return `${durationClock(totals.value.breakSeconds)} on break${extra}`;
+    }
+
+    if (overtimeMinutes.value > 0) {
+        return `${durationClock(totals.value.workSeconds)} today · ${minutesLabel(overtimeMinutes.value)} overtime`;
     }
 
     return `${durationClock(totals.value.workSeconds)} today`;
@@ -110,6 +111,7 @@ async function punch(action) {
                     {{ status === 'completed' ? office.today?.work_label : durationClock(totals.workSeconds) }}
                 </h2>
                 <p class="shift-detail">{{ stateDetail }}</p>
+                <Tag v-if="overtimeMinutes > 0" class="shift-ot" severity="warn" :value="`Overtime ${minutesLabel(overtimeMinutes)}`" icon="pi pi-hourglass" />
             </div>
             <Knob
                 v-if="variant === 'hero'"

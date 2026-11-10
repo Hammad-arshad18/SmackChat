@@ -35,6 +35,8 @@ const inviteRoles = [
     { label: 'Admin', value: 'admin' },
 ];
 
+const isPersonOnline = (person) => Boolean(person && (person.id === auth.user?.id || person.online));
+
 const filteredMembers = computed(() => office.members
     .filter((person) => (roleFilter.value ? person.role === roleFilter.value : true))
     .filter((person) => {
@@ -42,7 +44,7 @@ const filteredMembers = computed(() => office.members
         if (!needle) return true;
         return `${person.name} ${person.email} ${person.title || ''} ${person.status_text || ''}`.toLowerCase().includes(needle);
     })
-    .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name)));
+    .sort((a, b) => Number(isPersonOnline(b)) - Number(isPersonOnline(a)) || a.name.localeCompare(b.name)));
 const stats = computed(() => ({
     seats: office.members.length,
     online: office.onlineMembers.length,
@@ -210,13 +212,8 @@ function revoke(invite) {
                     :class="{ me: person.id === auth.user.id }"
                 >
                     <div class="person-top">
-                        <span class="presence-avatar" :class="{ online: person.online }">
-                            <Avatar
-                                :label="person.name.slice(0, 1)"
-                                shape="circle"
-                                size="large"
-                                :style="{ background: person.avatar_color, color: '#fff' }"
-                            />
+                        <span class="presence-avatar" :class="{ online: isPersonOnline(person) }">
+                            <PersonAvatar :person="person" size="large" />
                         </span>
                         <div class="person-copy">
                             <strong>{{ person.name }} <span v-if="person.id === auth.user.id" class="you-tag">you</span></strong>
@@ -226,8 +223,8 @@ function revoke(invite) {
                     </div>
 
                     <p class="person-status">
-                        <span class="status-dot" :class="{ online: person.online }" />
-                        {{ person.status_text || (person.online ? 'Online now' : person.last_seen_at ? `Last seen ${timeAgo(person.last_seen_at)}` : 'Away') }}
+                        <span class="status-dot" :class="{ online: isPersonOnline(person) }" />
+                        {{ person.status_text || (isPersonOnline(person) ? 'Online now' : person.last_seen_at ? `Last seen ${timeAgo(person.last_seen_at)}` : 'Away') }}
                     </p>
 
                     <div class="person-foot">
@@ -324,12 +321,12 @@ function revoke(invite) {
             </template>
             <div v-if="selectedPerson" class="person-detail">
                 <div class="person-detail-head">
-                    <span class="presence-avatar" :class="{ online: selectedPerson.online }">
-                        <Avatar :label="selectedPerson.name.slice(0, 1)" shape="circle" size="xlarge" :style="{ background: selectedPerson.avatar_color, color: '#fff' }" />
+                    <span class="presence-avatar" :class="{ online: isPersonOnline(selectedPerson) }">
+                        <PersonAvatar :person="selectedPerson" size="xlarge" />
                     </span>
                     <div>
                         <h2>{{ selectedPerson.name }}</h2>
-                        <p>{{ selectedPerson.title || 'Teammate' }} · <span :class="{ 'presence-on': selectedPerson.online }">{{ selectedPerson.online ? 'Online now' : 'Away' }}</span></p>
+                        <p>{{ selectedPerson.title || 'Teammate' }} · <span :class="{ 'presence-on': isPersonOnline(selectedPerson) }">{{ isPersonOnline(selectedPerson) ? 'Online now' : 'Away' }}</span></p>
                     </div>
                     <Tag :value="selectedPerson.role" :severity="roleSeverity(selectedPerson.role)" />
                 </div>

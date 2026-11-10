@@ -1,17 +1,44 @@
 import { defineStore } from 'pinia';
 import api from '@/api';
 import { ensureDevice, revealChannels, revealMessage } from '@/e2e';
-import { bindOffice, realtimeConnected, stopRealtime } from '@/realtime';
+import { bindOffice, realtimeConnected, stopRealtime, subscribeChannel } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
 
 let channelRefreshTimer = null;
 let shiftPoll = null;
+let officePoll = null;
 
 function shiftVersion(day) {
     const events = day?.events || [];
     const last = events.reduce((max, event) => Math.max(max, Date.parse(event.happened_at) || 0), 0);
 
     return last * 1000 + events.length;
+}
+
+function watchOffice(store) {
+    clearTimeout(officePoll);
+
+    const tick = async () => {
+        if (!store.slug) {
+            return;
+        }
+
+        try {
+            await Promise.all([store.refreshMembers(), store.refreshChannels()]);
+        } catch {
+            /* retry next tick */
+        }
+
+        if (!store.slug) {
+            return;
+        }
+
+        const wait = realtimeConnected() ? 30000 : 8000;
+        officePoll = setTimeout(tick, wait);
+    };
+
+    const wait = realtimeConnected() ? 30000 : 8000;
+    officePoll = setTimeout(tick, wait);
 }
 
 function watchShift(store) {
@@ -78,8 +105,8 @@ export const useOfficeStore = defineStore('office', {
         catchUp: (state) => state.channels
             .filter((channel) => channel.unread > 0)
             .sort((a, b) => (b.last_at || '').localeCompare(a.last_at || '')),
-        onlineMembers: (state) => state.members.filter((member) => member.online),
-        awayMembers: (state) => state.members.filter((member) => !member.online),
+        onlineMembers: (state) => state.members.filter((member) => member.online || member.id === useAuthStore().user?.id),
+        awayMembers: (state) => state.members.filter((member) => !member.online && member.id !== useAuthStore().user?.id),
         myFloorRow: (state) => state.floorRows.find((row) => row.user_id === state.today?.user_id) || null,
         activeFloor: (state) => state.floorRows.filter((row) => row.status === 'open' || row.status === 'on_break'),
     },
@@ -114,8 +141,14 @@ export const useOfficeStore = defineStore('office', {
                 userId,
                 (payload) => this.ingest(payload),
                 (payload) => this.applyShift(payload?.day),
+                async (event) => {
+                    if (event === 'member.joined' || event === 'channel.created') {
+                        await Promise.all([this.refreshMembers(), this.refreshChannels()]);
+                    }
+                },
             );
             watchShift(this);
+            watchOffice(this);
         },
         applyShift(day) {
             if (!day || (this.today && shiftVersion(day) < shiftVersion(this.today))) {
@@ -180,14 +213,35 @@ export const useOfficeStore = defineStore('office', {
                 return;
             }
 
+            const previousIds = new Set(this.channels.map((c) => c.id));
             const { data } = await api.get(`/workspaces/${this.slug}/channels`);
             this.channels = data.channels;
             await revealChannels(this);
+
+            if (this.workspace?.id) {
+                for (const channel of this.channels) {
+                    if (!previousIds.has(channel.id)) {
+                        subscribeChannel(this.workspace.id, channel.id, (payload) => this.ingest(payload));
+                    }
+                }
+            }
         },
         async refreshMembers() {
             const { data } = await api.get(`/workspaces/${this.slug}/members`);
             this.members = data.members;
             this.invitations = data.invitations;
+        },
+        async updateLogo(file) {
+            const body = new FormData();
+            body.append('logo', file);
+            const { data } = await api.post(`/workspaces/${this.slug}/logo`, body);
+            this.workspace = { ...this.workspace, ...data.workspace };
+            return data.workspace;
+        },
+        async removeLogo() {
+            const { data } = await api.delete(`/workspaces/${this.slug}/logo`);
+            this.workspace = { ...this.workspace, ...data.workspace };
+            return data.workspace;
         },
         async refreshFloor() {
             if (!this.slug) {
@@ -254,6 +308,8 @@ export const useOfficeStore = defineStore('office', {
         reset() {
             clearTimeout(shiftPoll);
             shiftPoll = null;
+            clearTimeout(officePoll);
+            officePoll = null;
             stopRealtime();
             this.workspace = null;
             this.channels = [];

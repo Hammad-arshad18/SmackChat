@@ -4,10 +4,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
 import api, { errorText } from '@/api';
-import { revealMessage, sealDocument, searchMessages } from '@/e2e';
+import { plainText, revealMessage, sealDocument, searchMessages } from '@/e2e';
 import Composer from '@/components/Composer.vue';
+import EmojiPicker from '@/components/EmojiPicker.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import MessageBody from '@/components/MessageBody.vue';
+import { isEmojiOnlyText } from '@/lib/emojis';
 import { reportViewing } from '@/push';
 import { publishTyping, realtimeConnected, watchTyping, whenRealtime } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
@@ -528,6 +530,14 @@ async function react(message, emoji) {
     }
 }
 
+function isEmojiOnly(message) {
+    if (!message || message.deleted || message.attachments?.length) {
+        return false;
+    }
+    const text = message.text || (message.document ? plainText(message.document) : '');
+    return isEmojiOnlyText(text);
+}
+
 function openReactions(event, message) {
     reactionTarget.value = message;
     reactionPop.value.toggle(event);
@@ -790,12 +800,11 @@ onBeforeUnmount(() => {
     <div class="chat" :class="{ 'with-thread': thread }">
         <header class="chat-header">
             <div class="chat-identity">
-                <Avatar
+                <PersonAvatar
                     v-if="isDm"
-                    :label="(current?.label || '?').slice(0, 1)"
-                    shape="circle"
+                    :person="current?.people?.[0]"
+                    :name="current?.label"
                     size="large"
-                    :style="{ background: current?.people?.[0]?.avatar_color || '#0e7c66', color: '#fff' }"
                 />
                 <span v-else class="chat-icon" :class="`type-${current?.type}`">
                     <i :class="channelIcon(current?.type)" />
@@ -880,11 +889,10 @@ onBeforeUnmount(() => {
                             }"
                         >
                             <div class="msg-avatar">
-                                <Avatar
+                                <PersonAvatar
                                     v-if="!stacked(message, index, messages) && message.user?.id !== auth.user.id"
-                                    :label="(message.user?.name || '?').slice(0, 1)"
-                                    shape="circle"
-                                    :style="{ background: message.user?.avatar_color || '#928875', color: '#fff' }"
+                                    :person="message.user"
+                                    color="#928875"
                                 />
                             </div>
                             <div class="msg-main">
@@ -894,7 +902,7 @@ onBeforeUnmount(() => {
                                     <span v-if="message.edited_at" class="edited">edited</span>
                                 </div>
 
-                                <div class="msg-bubble">
+                                <div class="msg-bubble" :class="{ 'is-emoji-only': isEmojiOnly(message) }">
                                     <p v-if="message.deleted" class="deleted-copy">This message was deleted.</p>
                                     <template v-else>
                                         <MessageBody v-if="message.document" :node="message.document" />
@@ -1035,10 +1043,10 @@ onBeforeUnmount(() => {
                 <div ref="threadScroller" class="thread-scroll">
                     <article class="thread-parent">
                         <div class="thread-parent-head">
-                            <Avatar :label="(thread.user?.name || '?').slice(0, 1)" shape="circle" :style="{ background: thread.user?.avatar_color || '#928875', color: '#fff' }" />
+                            <PersonAvatar :person="thread.user" color="#928875" />
                             <div><strong>{{ thread.user?.name }}</strong><time>{{ formatClock(thread.created_at) }}</time></div>
                         </div>
-                        <div class="thread-parent-body">
+                        <div class="thread-parent-body" :class="{ 'is-emoji-only': isEmojiOnly(thread) }">
                             <MessageBody v-if="thread.document" :node="thread.document" />
                             <p v-else-if="thread.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device.</p>
                             <MessageAttachments
@@ -1076,17 +1084,13 @@ onBeforeUnmount(() => {
                             arriving: arriving.has(reply.id),
                         }"
                     >
-                        <Avatar
-                            :label="(reply.user?.name || '?').slice(0, 1)"
-                            shape="circle"
-                            :style="{ background: reply.user?.avatar_color || '#928875', color: '#fff' }"
-                        />
+                        <PersonAvatar :person="reply.user" color="#928875" />
                         <div>
                             <div class="thread-reply-head">
                                 <strong>{{ reply.user?.id === auth.user.id ? 'You' : reply.user?.name }}</strong>
                                 <time>{{ formatClock(reply.created_at) }}</time>
                             </div>
-                            <div class="thread-reply-body">
+                            <div class="thread-reply-body" :class="{ 'is-emoji-only': isEmojiOnly(reply) }">
                                 <p v-if="reply.deleted" class="deleted-copy">This reply was deleted.</p>
                                 <template v-else>
                                     <MessageBody v-if="reply.document" :node="reply.document" />
@@ -1156,9 +1160,7 @@ onBeforeUnmount(() => {
         </div>
 
         <Popover ref="reactionPop">
-            <div class="emoji-grid">
-                <button v-for="emoji in emojis" :key="emoji" type="button" @click="pickReaction(emoji)">{{ emoji }}</button>
-            </div>
+            <EmojiPicker for-reactions @select="pickReaction" />
         </Popover>
 
         <Drawer v-model:visible="detailsOpen" position="right" class="details-drawer">
@@ -1199,7 +1201,7 @@ onBeforeUnmount(() => {
                     <ul class="member-list">
                         <li v-for="person in channelMembers" :key="person.id">
                             <span class="presence-avatar" :class="{ online: person.online }">
-                                <Avatar :label="person.name.slice(0, 1)" shape="circle" :style="{ background: person.avatar_color, color: '#fff' }" />
+                                <PersonAvatar :person="person" />
                             </span>
                             <span><strong>{{ person.name }}</strong><small>{{ person.title || person.email }}</small></span>
                             <Tag :value="person.role" severity="secondary" />
@@ -1220,7 +1222,7 @@ onBeforeUnmount(() => {
                         >
                             <template #option="slotProps">
                                 <div class="select-person">
-                                    <Avatar :label="slotProps.option.name.slice(0, 1)" shape="circle" :style="{ background: slotProps.option.avatar_color, color: '#fff' }" />
+                                    <PersonAvatar :person="slotProps.option" />
                                     <span>{{ slotProps.option.name }}</span>
                                 </div>
                             </template>

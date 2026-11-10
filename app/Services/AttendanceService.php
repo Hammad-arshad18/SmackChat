@@ -129,7 +129,7 @@ class AttendanceService
                 'outside_hours' => $day->outside_hours || $checkoutContext['outside_hours'],
             ]);
 
-            $posted = $this->postTimesheet($workspace, $user, $day->fresh());
+            $posted = $this->postTimesheet($workspace, $user, $day->fresh('events')->loadMissing('workspace'));
 
             return ['day' => $day->fresh('events'), 'message' => $posted];
         });
@@ -137,6 +137,14 @@ class AttendanceService
 
     public function presentDay(AttendanceDay $day): array
     {
+        $day->loadMissing('workspace');
+        $workspace = $day->workspace;
+        $standard = $workspace?->standardDayMinutes() ?? (int) config('smackchat.standard_day_minutes', 480);
+        $totals = $this->totalsFor($day);
+        $counted = $totals['work_minutes'];
+        $break = $totals['break_minutes'];
+        $portions = $this->calculator->portions($counted, $standard);
+
         return [
             'id' => $day->id,
             'user_id' => $day->user_id,
@@ -150,10 +158,17 @@ class AttendanceService
             'check_out_latitude' => $day->check_out_latitude,
             'check_out_longitude' => $day->check_out_longitude,
             'location_verified' => $day->check_in_latitude !== null && $day->check_in_longitude !== null,
-            'work_minutes' => (int) ($day->work_minutes ?? 0),
-            'break_minutes' => (int) ($day->break_minutes ?? 0),
-            'work_label' => Duration::label((int) ($day->work_minutes ?? 0)),
-            'break_label' => Duration::label((int) ($day->break_minutes ?? 0)),
+            'work_minutes' => $counted,
+            'break_minutes' => $break,
+            'counted_minutes' => $counted,
+            'regular_minutes' => $portions['regular_minutes'],
+            'overtime_minutes' => $portions['overtime_minutes'],
+            'standard_day_minutes' => $standard,
+            'work_label' => Duration::label($counted),
+            'counted_label' => Duration::label($counted),
+            'regular_label' => Duration::label($portions['regular_minutes']),
+            'overtime_label' => Duration::label($portions['overtime_minutes']),
+            'break_label' => Duration::label($break),
             'status' => $day->status,
             'outside_hours' => $day->outside_hours,
             'non_working_day' => $day->non_working_day,
@@ -217,6 +232,39 @@ class AttendanceService
         return 2 * $earth * asin(min(1, sqrt($a)));
     }
 
+    /**
+     * @return array{work_minutes: int, break_minutes: int}
+     */
+    private function totalsFor(AttendanceDay $day): array
+    {
+        $events = $day->relationLoaded('events') ? $day->events : $day->events()->get();
+
+        if ($events->isEmpty()) {
+            return [
+                'work_minutes' => (int) ($day->work_minutes ?? 0),
+                'break_minutes' => (int) ($day->break_minutes ?? 0),
+            ];
+        }
+
+        $end = $day->check_out_at ?: now();
+        $totals = $this->calculator->summarize($events, $end);
+
+        if (
+            $day->status === 'completed'
+            && (
+                (int) ($day->work_minutes ?? 0) !== $totals['work_minutes']
+                || (int) ($day->break_minutes ?? 0) !== $totals['break_minutes']
+            )
+        ) {
+            $day->forceFill([
+                'work_minutes' => $totals['work_minutes'],
+                'break_minutes' => $totals['break_minutes'],
+            ])->saveQuietly();
+        }
+
+        return $totals;
+    }
+
     private function event(AttendanceDay $day, string $type, Carbon $at): void
     {
         $day->events()->create([
@@ -238,11 +286,17 @@ class AttendanceService
 
         $localIn = $day->check_in_at->copy()->timezone($workspace->timezone);
         $localOut = $day->check_out_at->copy()->timezone($workspace->timezone);
+        $standard = $workspace->standardDayMinutes();
         $lines = [
             $user->name.' checked out on '.$day->work_date->format('D j M').'.',
             'In '.$localIn->format('g:i A').' · out '.$localOut->format('g:i A').'.',
             'Worked '.Duration::label($day->work_minutes).' with '.Duration::label($day->break_minutes).' of breaks.',
         ];
+
+        $overtime = $this->calculator->portions((int) $day->work_minutes, $standard)['overtime_minutes'];
+        if ($overtime > 0) {
+            $lines[] = Duration::label($overtime).' of that is overtime, past a '.Duration::label($standard).' day. Breaks are not counted.';
+        }
 
         if ($day->holiday_name) {
             $lines[] = 'The office clock marks this as a holiday: '.$day->holiday_name.'.';

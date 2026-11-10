@@ -27,6 +27,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/e2e/devices', [E2eController::class, 'device']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me', [AuthController::class, 'updateProfile']);
+    Route::post('/me/avatar', [AuthController::class, 'updateAvatar']);
+    Route::delete('/me/avatar', [AuthController::class, 'destroyAvatar']);
+    Route::get('/avatars/{user}', [AuthController::class, 'avatar']);
     Route::post('/heartbeat', [AuthController::class, 'heartbeat']);
     Route::get('/realtime/token', [RealtimeController::class, 'token']);
     Route::get('/push/key', [PushController::class, 'key']);
@@ -41,6 +44,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('workspaces/{workspace}')->middleware('workspace')->group(function () {
         Route::get('/', [WorkspaceController::class, 'show']);
         Route::patch('/', [WorkspaceController::class, 'update']);
+        Route::get('/logo', [WorkspaceController::class, 'logo']);
+        Route::post('/logo', [WorkspaceController::class, 'updateLogo']);
+        Route::delete('/logo', [WorkspaceController::class, 'destroyLogo']);
 
         Route::get('/members', [MemberController::class, 'index']);
         Route::post('/invitations', [MemberController::class, 'invite']);

@@ -28,8 +28,15 @@ class EnsureWorkspaceMember
         $request->attributes->set('workspace', $workspace);
         $request->attributes->set('membership', $membership);
 
+        $updates = [];
         if ($user->current_workspace_id !== $workspace->id) {
-            $user->forceFill(['current_workspace_id' => $workspace->id])->save();
+            $updates['current_workspace_id'] = $workspace->id;
+        }
+        if (! $user->last_seen_at || $user->last_seen_at->lt(now()->subMinute())) {
+            $updates['last_seen_at'] = now();
+        }
+        if (! empty($updates)) {
+            $user->forceFill($updates)->saveQuietly();
         }
 
         return $next($request);

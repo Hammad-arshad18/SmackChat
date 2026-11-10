@@ -10,6 +10,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 
 class AuthController extends ApiController
@@ -177,8 +179,13 @@ class AuthController extends ApiController
 
     public function me(Request $request)
     {
+        $user = $request->user();
+        if (! $user->last_seen_at || $user->last_seen_at->lt(now()->subMinute())) {
+            $user->forceFill(['last_seen_at' => now()])->saveQuietly();
+        }
+
         return response()->json([
-            'user' => $this->userPayload($request->user()),
+            'user' => $this->userPayload($user->fresh()),
         ]);
     }
 
@@ -199,6 +206,45 @@ class AuthController extends ApiController
         ]);
     }
 
+    public function updateAvatar(Request $request)
+    {
+        $data = $request->validate([
+            'avatar' => ['required', 'file', 'image', 'mimes:jpg,jpeg,png,webp,gif', 'max:5120'],
+        ]);
+
+        $user = $request->user();
+        $this->deleteAvatar($user);
+        $file = $data['avatar'];
+        $extension = strtolower($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'jpg');
+        $path = $file->storeAs('avatars/'.$user->id, Str::uuid()->toString().'.'.$extension, 'local');
+        $user->forceFill(['avatar_path' => $path])->save();
+
+        return response()->json([
+            'user' => $this->userPayload($user->fresh()),
+        ]);
+    }
+
+    public function destroyAvatar(Request $request)
+    {
+        $user = $request->user();
+        $this->deleteAvatar($user);
+        $user->forceFill(['avatar_path' => null])->save();
+
+        return response()->json([
+            'user' => $this->userPayload($user->fresh()),
+        ]);
+    }
+
+    public function avatar(Request $request, User $user)
+    {
+        abort_unless($this->sharesWorkspace($request->user(), $user), 403);
+        abort_unless($user->avatar_path && Storage::disk('local')->exists($user->avatar_path), 404);
+
+        return Storage::disk('local')->response($user->avatar_path, null, [
+            'Cache-Control' => 'private, max-age=86400',
+        ]);
+    }
+
     public function heartbeat(Request $request)
     {
         $request->user()->forceFill(['last_seen_at' => now()])->save();
@@ -206,8 +252,28 @@ class AuthController extends ApiController
         return response()->json(['ok' => true]);
     }
 
+    private function deleteAvatar(User $user): void
+    {
+        if ($user->avatar_path) {
+            Storage::disk('local')->delete($user->avatar_path);
+        }
+    }
+
+    private function sharesWorkspace(User $viewer, User $subject): bool
+    {
+        if ($viewer->id === $subject->id) {
+            return true;
+        }
+
+        $workspaceIds = $viewer->workspaces()->pluck('workspaces.id');
+
+        return $subject->workspaces()->whereIn('workspaces.id', $workspaceIds)->exists();
+    }
+
     private function establishSession(Request $request, User $user): void
     {
+        $user->forceFill(['last_seen_at' => now()])->saveQuietly();
+
         if (! $request->hasSession()) {
             return;
         }

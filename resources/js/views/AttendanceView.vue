@@ -66,7 +66,9 @@ const scopeOptions = computed(() => [
 const scopeName = computed(() => scopeOptions.value.find((person) => person.id === scope.value)?.name || 'You');
 const scopeRows = computed(() => (scope.value === 0 ? rows.value : rows.value.filter((row) => row.user_id === scope.value)));
 const completedRows = computed(() => scopeRows.value.filter((row) => row.status === 'completed'));
-const totalMinutes = computed(() => scopeRows.value.reduce((total, row) => total + (row.work_minutes || 0), 0));
+const minutesOf = (row) => row.counted_minutes ?? row.work_minutes ?? 0;
+const totalMinutes = computed(() => scopeRows.value.reduce((total, row) => total + minutesOf(row), 0));
+const overtimeMinutes = computed(() => scopeRows.value.reduce((total, row) => total + (row.overtime_minutes || 0), 0));
 const breakMinutes = computed(() => scopeRows.value.reduce((total, row) => total + (row.break_minutes || 0), 0));
 const daysWorked = computed(() => new Set(scopeRows.value.filter((row) => row.work_minutes > 0 || row.status !== 'idle').map((row) => row.work_date)).size);
 const avgMinutes = computed(() => (completedRows.value.length ? Math.round(completedRows.value.reduce((total, row) => total + row.work_minutes, 0) / completedRows.value.length) : 0));
@@ -82,9 +84,12 @@ const teamSummary = computed(() => {
                 id: row.user_id,
                 name: row.user_name || person?.name || 'Teammate',
                 color: person?.avatar_color || '#0e7c66',
+                avatar_color: person?.avatar_color || '#0e7c66',
+                avatar_url: person?.avatar_url || null,
                 title: person?.title,
                 online: person?.online,
                 minutes: 0,
+                overtime: 0,
                 breaks: 0,
                 days: 0,
                 open: false,
@@ -92,9 +97,11 @@ const teamSummary = computed(() => {
         }
 
         const entry = map.get(row.user_id);
-        entry.minutes += row.work_minutes || 0;
+        const worked = row.counted_minutes ?? row.work_minutes ?? 0;
+        entry.minutes += worked;
+        entry.overtime += row.overtime_minutes || 0;
         entry.breaks += row.break_minutes || 0;
-        if (row.work_minutes > 0 || row.status === 'open' || row.status === 'on_break') entry.days += 1;
+        if (worked > 0 || row.status === 'open' || row.status === 'on_break') entry.days += 1;
         if (row.status === 'open' || row.status === 'on_break') entry.open = true;
     });
 
@@ -113,7 +120,7 @@ const heatmap = computed(() => {
     for (let day = 1; day <= days; day += 1) {
         const date = `${month.value}-${String(day).padStart(2, '0')}`;
         const row = rowForDate(date);
-        const minutes = row?.work_minutes || 0;
+        const minutes = row?.counted_minutes ?? row?.work_minutes ?? 0;
         cells.push({
             date,
             day,
@@ -258,6 +265,10 @@ function inspectRow(row) {
                 <div><strong>{{ minutesLabel(avgMinutes) }}</strong><small>Average day</small></div>
             </div>
             <div class="stat-card">
+                <span class="stat-icon amber"><i class="pi pi-hourglass" /></span>
+                <div><strong>{{ minutesLabel(overtimeMinutes) }}</strong><small>Overtime past {{ minutesLabel(office.workspace?.standard_day_minutes || 480) }}</small></div>
+            </div>
+            <div class="stat-card">
                 <span class="stat-icon rose"><i class="pi pi-pause" /></span>
                 <div><strong>{{ minutesLabel(breakMinutes) }}</strong><small>Break time</small></div>
             </div>
@@ -339,7 +350,7 @@ function inspectRow(row) {
                             <div v-if="openToday.length" class="live-list">
                                 <div v-for="row in openToday" :key="row.id" class="live-row">
                                     <span class="presence-avatar online">
-                                        <Avatar :label="(row.user_name || '?').slice(0, 1)" shape="circle" :style="{ background: office.members.find((person) => person.id === row.user_id)?.avatar_color || '#0e7c66', color: '#fff' }" />
+                                        <PersonAvatar :person="office.members.find((person) => person.id === row.user_id)" :name="row.user_name" />
                                     </span>
                                     <span>
                                         <strong>{{ row.user_name }}</strong>
@@ -385,7 +396,7 @@ function inspectRow(row) {
                             <Column field="user_name" header="Person" sortable>
                                 <template #body="{ data }">
                                     <div class="table-person">
-                                        <Avatar :label="(data.user_name || '?').slice(0, 1)" shape="circle" :style="{ background: office.members.find((person) => person.id === data.user_id)?.avatar_color || '#0e7c66', color: '#fff' }" />
+                                        <PersonAvatar :person="office.members.find((person) => person.id === data.user_id)" :name="data.user_name" />
                                         <span><strong>{{ data.user_name }}</strong><small>{{ data.user_email }}</small></span>
                                     </div>
                                 </template>
@@ -399,8 +410,14 @@ function inspectRow(row) {
                             <Column field="check_out_at" header="Out">
                                 <template #body="{ data }">{{ data.check_out_at ? formatClock(data.check_out_at) : '—' }}</template>
                             </Column>
-                            <Column field="work_minutes" header="Worked" sortable>
-                                <template #body="{ data }"><strong>{{ data.work_label }}</strong></template>
+                            <Column field="counted_minutes" header="Worked" sortable>
+                                <template #body="{ data }"><strong>{{ data.counted_label || data.work_label }}</strong></template>
+                            </Column>
+                            <Column field="overtime_minutes" header="Overtime" sortable>
+                                <template #body="{ data }">
+                                    <Tag v-if="data.overtime_minutes > 0" :value="data.overtime_label" severity="warn" />
+                                    <span v-else>{{ data.overtime_label || '0m' }}</span>
+                                </template>
                             </Column>
                             <Column field="break_minutes" header="Breaks">
                                 <template #body="{ data }">{{ data.break_label }}</template>
@@ -436,7 +453,7 @@ function inspectRow(row) {
                             @click="selectPerson(person.id)"
                         >
                             <span class="presence-avatar" :class="{ online: person.online }">
-                                <Avatar :label="person.name.slice(0, 1)" shape="circle" :style="{ background: person.color, color: '#fff' }" />
+                                <PersonAvatar :person="person" :color="person.color" />
                             </span>
                             <span class="team-copy">
                                 <strong>{{ person.name }}</strong>
@@ -444,7 +461,7 @@ function inspectRow(row) {
                             </span>
                             <span class="team-hours">
                                 <strong>{{ minutesLabel(person.minutes) }}</strong>
-                                <small>{{ person.days }} day{{ person.days === 1 ? '' : 's' }}</small>
+                                <small>{{ person.days }} day{{ person.days === 1 ? '' : 's' }}<template v-if="person.overtime"> · {{ minutesLabel(person.overtime) }} overtime</template></small>
                             </span>
                             <Tag v-if="person.open" value="Live" severity="success" />
                         </button>
@@ -469,9 +486,10 @@ function inspectRow(row) {
             </template>
             <div v-if="selectedRow" class="shift-detail">
                 <div class="shift-detail-stats">
-                    <div><span>Worked</span><strong>{{ selectedRow.work_label }}</strong></div>
+                    <div><span>Worked</span><strong>{{ selectedRow.counted_label || selectedRow.work_label }}</strong></div>
+                    <div><span>Regular</span><strong>{{ selectedRow.regular_label || '0m' }}</strong></div>
+                    <div><span>Overtime</span><strong>{{ selectedRow.overtime_label || '0m' }}</strong></div>
                     <div><span>Breaks</span><strong>{{ selectedRow.break_label }}</strong></div>
-                    <div><span>Status</span><strong>{{ statusLabel(selectedRow.status) }}</strong></div>
                 </div>
                 <div class="shift-detail-times">
                     <span><i class="pi pi-sign-in" /> {{ selectedRow.check_in_at ? formatClock(selectedRow.check_in_at) : 'Not checked in' }}</span>
