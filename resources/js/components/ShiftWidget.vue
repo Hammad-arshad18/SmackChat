@@ -17,8 +17,13 @@ let timer;
 
 const status = computed(() => office.today?.status || 'idle');
 const totals = computed(() => shiftTotals(office.today?.events || [], tick.value));
-const standardMinutes = computed(() => office.workspace?.standard_day_minutes || office.today?.standard_day_minutes || 480);
-const scheduledMinutes = computed(() => Math.max(60, office.workspace?.window_minutes || standardMinutes.value));
+const standardMinutes = computed(() => {
+    const expected = office.workspace?.standard_day_minutes || office.today?.standard_day_minutes || 480;
+
+    return Math.max(60, expected);
+});
+const breakAllowanceMinutes = computed(() => Math.max(0, office.workspace?.break_allowance_minutes || 0));
+const breakTakenMinutes = computed(() => Math.floor(totals.value.breakSeconds / 60));
 const workedMinutes = computed(() => {
     if (status.value === 'completed') {
         return office.today?.work_minutes || 0;
@@ -27,7 +32,18 @@ const workedMinutes = computed(() => {
     return Math.floor(totals.value.workSeconds / 60);
 });
 const overtimeMinutes = computed(() => Math.max(0, workedMinutes.value - standardMinutes.value));
-const progress = computed(() => Math.min(100, Math.round((workedMinutes.value / scheduledMinutes.value) * 100)));
+const progress = computed(() => Math.min(100, Math.round((workedMinutes.value / standardMinutes.value) * 100)));
+const dayPlan = computed(() => {
+    const hours = office.workspace
+        ? `${wallClockLabel(office.workspace.work_start)}–${wallClockLabel(office.workspace.work_end)}`
+        : '';
+    const work = `${minutesLabel(standardMinutes.value)} work`;
+    const breakPart = breakAllowanceMinutes.value
+        ? `${minutesLabel(breakAllowanceMinutes.value)} break`
+        : 'no break';
+
+    return hours ? `${hours} · ${work} · ${breakPart}` : `${work} · ${breakPart}`;
+});
 const stateLabel = computed(() => ({
     idle: 'Not checked in',
     open: 'On the clock',
@@ -36,7 +52,7 @@ const stateLabel = computed(() => ({
 }[status.value] || 'Not checked in'));
 const stateDetail = computed(() => {
     if (status.value === 'idle') {
-        return office.workspace ? `Office hours ${wallClockLabel(office.workspace.work_start)}–${wallClockLabel(office.workspace.work_end)}` : '';
+        return dayPlan.value;
     }
 
     if (status.value === 'completed') {
@@ -44,9 +60,12 @@ const stateDetail = computed(() => {
     }
 
     if (status.value === 'on_break') {
+        const allowance = breakAllowanceMinutes.value
+            ? ` / ${minutesLabel(breakAllowanceMinutes.value)} allowed`
+            : '';
         const extra = overtimeMinutes.value > 0 ? ` · ${minutesLabel(overtimeMinutes.value)} overtime` : '';
 
-        return `${durationClock(totals.value.breakSeconds)} on break${extra}`;
+        return `${durationClock(totals.value.breakSeconds)} on break${allowance}${extra}`;
     }
 
     if (overtimeMinutes.value > 0) {
@@ -127,9 +146,16 @@ async function punch(action) {
         <div v-if="variant === 'hero'" class="shift-progress">
             <div class="shift-progress-labels">
                 <span>Shift progress</span>
-                <span>{{ minutesLabel(workedMinutes) }} / {{ minutesLabel(scheduledMinutes) }}</span>
+                <span>{{ minutesLabel(workedMinutes) }} / {{ minutesLabel(standardMinutes) }} work</span>
             </div>
             <ProgressBar :value="progress" :show-value="false" class="shift-bar" />
+            <div class="shift-progress-meta">
+                <span>{{ dayPlan }}</span>
+                <span v-if="status === 'open' || status === 'on_break' || status === 'completed'">
+                    Break {{ status === 'completed' ? (office.today?.break_label || '0m') : minutesLabel(breakTakenMinutes) }}
+                    <template v-if="breakAllowanceMinutes"> / {{ minutesLabel(breakAllowanceMinutes) }}</template>
+                </span>
+            </div>
         </div>
 
         <p v-if="note" class="shift-note"><i class="pi pi-info-circle" /> {{ note }}</p>

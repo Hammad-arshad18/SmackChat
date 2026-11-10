@@ -1188,6 +1188,15 @@ kbd {
     font-size: 0.7rem;
 }
 
+.shift-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    color: rgba(244, 242, 234, 0.48);
+    font-size: 0.68rem;
+}
+
 .shift-bar .p-progressbar-value {
     background: linear-gradient(90deg, var(--lime), #9ae6b4);
 }
