@@ -23,6 +23,7 @@ class Workspace extends Model
         'location_latitude',
         'location_longitude',
         'location_radius_m',
+        'location_allowed_ips',
         'plan',
         'plan_seats',
         'plan_activated_at',
@@ -37,6 +38,7 @@ class Workspace extends Model
             'location_latitude' => 'float',
             'location_longitude' => 'float',
             'location_radius_m' => 'integer',
+            'location_allowed_ips' => 'array',
             'plan_activated_at' => 'datetime',
         ];
     }

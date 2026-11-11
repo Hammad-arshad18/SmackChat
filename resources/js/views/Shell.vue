@@ -8,6 +8,13 @@ import WorkspaceNav from '@/components/WorkspaceNav.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
 import { useUiStore } from '@/stores/ui';
+import {
+    locationState,
+    needsPermissionPrompt,
+    notificationState,
+    refreshPermissionState,
+    requestAppPermissions,
+} from '@/permissions';
 import { ensurePush, isViewingMessage, needsHomeScreen, pushActive, pushError, showAlert } from '@/push';
 import { timeAgo } from '@/time';
 
@@ -23,6 +30,8 @@ const channelOpen = ref(false);
 const dmOpen = ref(false);
 const workspaceOpen = ref(false);
 const shortcutsOpen = ref(false);
+const permissionsOpen = ref(false);
+const permissionsBusy = ref(false);
 const busy = ref(false);
 const notifications = ref(null);
 const quickMenu = ref(null);
@@ -30,6 +39,7 @@ const channelForm = ref({ name: '', description: '', private: false, member_ids:
 const dmUser = ref(null);
 const workspaceForm = ref({ name: '', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
 let heartbeat;
+let permissionsAsked = false;
 
 const initials = computed(() => (office.workspace?.name || 'S').slice(0, 1).toUpperCase());
 const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Dubai', 'Europe/London', 'America/New_York'];
@@ -67,13 +77,26 @@ async function load(slug) {
     ready.value = false;
     try {
         await office.load(slug);
+        await refreshPermissionState();
         ready.value = true;
+        await maybeAskPermissions();
     } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
             auth.user = null;
         }
         toast.add({ severity: 'error', summary: 'Workspace', detail: errorText(error), life: 4000 });
         router.push('/login');
+    }
+}
+
+async function maybeAskPermissions() {
+    if (permissionsAsked) {
+        return;
+    }
+
+    permissionsAsked = true;
+    if (needsPermissionPrompt()) {
+        permissionsOpen.value = true;
     }
 }
 
@@ -92,11 +115,12 @@ onMounted(() => {
     window.addEventListener('focus', beat);
     beat();
     heartbeat = setInterval(beat, 30000);
-    ensurePush().then((ready) => {
-        if (ready) {
+    ensurePush().then((ok) => {
+        if (ok) {
             ui.setPreference('desktopNotifications', true);
         }
     });
+    refreshPermissionState();
 });
 
 watch(() => route.params.slug, (slug, previous) => {
@@ -265,47 +289,118 @@ async function markAllRead() {
     }
 }
 
-const showAlertBanner = computed(() => ready.value && !pushActive.value);
-const alertBannerText = computed(() => pushError.value || 'Turn on alerts so messages reach this phone.');
+const locationMissing = computed(() => ['prompt', 'denied'].includes(locationState.value));
+const alertsMissing = computed(() => !pushActive.value);
+const showAlertBanner = computed(() => ready.value && (alertsMissing.value || locationMissing.value));
+const alertBannerText = computed(() => {
+    if (alertsMissing.value && locationMissing.value) {
+        return 'Turn on location and alerts so check-in and messages work on this device.';
+    }
+    if (locationMissing.value) {
+        return locationState.value === 'denied'
+            ? 'Location is blocked. Allow it in browser settings for attendance check-in.'
+            : 'Allow location so attendance can confirm you are at the office.';
+    }
+
+    return pushError.value || 'Turn on alerts so messages reach this phone.';
+});
+const permissionItems = computed(() => [
+    {
+        key: 'location',
+        icon: 'pi pi-map-marker',
+        title: 'Location',
+        detail: office.workspace?.location_restricted
+            ? 'Needed with the office network to check in and out.'
+            : 'Used when this workspace turns on office presence checks.',
+        state: locationState.value,
+    },
+    {
+        key: 'notifications',
+        icon: 'pi pi-bell',
+        title: 'Notifications',
+        detail: notificationState.value === 'homescreen'
+            ? 'Open SmackChat from the Home Screen icon, then allow alerts there.'
+            : 'Needed so new messages can reach this phone when you are away.',
+        state: notificationState.value === 'granted' || pushActive.value ? 'granted' : notificationState.value,
+    },
+]);
+
+function permissionLabel(state) {
+    if (state === 'granted') return 'On';
+    if (state === 'denied') return 'Blocked';
+    if (state === 'homescreen') return 'Install first';
+    if (state === 'unsupported') return 'Unavailable';
+    return 'Off';
+}
+
+function permissionSeverity(state) {
+    if (state === 'granted') return 'success';
+    if (state === 'denied' || state === 'homescreen') return 'warn';
+    return 'secondary';
+}
 
 async function enableAlerts() {
-    if (needsHomeScreen()) {
-        toast.add({
-            severity: 'warn',
-            summary: 'Open the home screen app',
-            detail: 'Add SmackChat to your Home Screen, open that icon, then tap Turn on alerts.',
-            life: 6000,
-        });
-        return;
-    }
+    permissionsOpen.value = true;
+}
 
-    const readyPush = await ensurePush({ prompt: true });
-    if (!readyPush) {
-        toast.add({
-            severity: 'warn',
-            summary: 'Alerts are off',
-            detail: pushError.value || 'Allow notifications for SmackChat.',
-            life: 5000,
-        });
-        return;
-    }
+async function allowPermissions() {
+    permissionsBusy.value = true;
+    try {
+        const result = await requestAppPermissions();
+        await refreshPermissionState();
 
-    ui.setPreference('desktopNotifications', true);
-    const { data } = await api.post('/push/test').catch(() => ({ data: { sent: 0, subscriptions: 0 } }));
-    toast.add({
-        severity: data?.sent ? 'success' : 'warn',
-        summary: data?.sent ? 'Test alert sent' : 'Phone not registered',
-        detail: data?.sent
-            ? 'You should see “Alerts are on for this phone.”'
-            : 'Allow notifications again from the installed SmackChat icon.',
-        life: 5000,
-    });
+        if (result.notification.ok) {
+            ui.setPreference('desktopNotifications', true);
+            const { data } = await api.post('/push/test').catch(() => ({ data: { sent: 0, subscriptions: 0 } }));
+            if (data?.sent) {
+                toast.add({
+                    severity: 'success',
+                    summary: 'Alerts are on',
+                    detail: 'You should see “Alerts are on for this phone.”',
+                    life: 4000,
+                });
+            }
+        } else if (result.notification.message) {
+            toast.add({
+                severity: 'warn',
+                summary: 'Alerts',
+                detail: result.notification.message,
+                life: 5000,
+            });
+        }
+
+        if (!result.location.ok && result.location.message) {
+            toast.add({
+                severity: 'warn',
+                summary: 'Location',
+                detail: result.location.message,
+                life: 5000,
+            });
+        }
+
+        if (result.location.ok && result.notification.ok) {
+            permissionsOpen.value = false;
+            toast.add({ severity: 'success', summary: 'Access ready', detail: 'Location and alerts are enabled.', life: 2800 });
+        } else if (result.location.ok || result.notification.ok) {
+            permissionsOpen.value = needsPermissionPrompt();
+        }
+    } finally {
+        permissionsBusy.value = false;
+    }
+}
+
+function skipPermissions() {
+    permissionsOpen.value = false;
 }
 
 function openNotifications(event) {
     notifications.value.toggle(event);
     if (!pushActive.value) {
-        enableAlerts();
+        ensurePush({ prompt: true }).then((ok) => {
+            if (ok) {
+                ui.setPreference('desktopNotifications', true);
+            }
+        });
     }
 }
 </script>
@@ -323,7 +418,7 @@ function openNotifications(event) {
 
         <div class="app-main">
             <button v-if="showAlertBanner" type="button" class="alert-banner" @click="enableAlerts">
-                <i class="pi pi-bell" />
+                <i :class="locationMissing && !alertsMissing ? 'pi pi-map-marker' : 'pi pi-bell'" />
                 <span>{{ alertBannerText }}</span>
             </button>
             <header class="topbar">
@@ -565,6 +660,38 @@ function openNotifications(event) {
                 <div><span>Italic</span><kbd>⌘</kbd><kbd>I</kbd></div>
                 <div><span>Open channel</span><kbd>⌘</kbd><kbd>K</kbd><kbd>↵</kbd></div>
                 <div><span>Attendance</span><kbd>⌘</kbd><kbd>K</kbd><kbd>⇧</kbd><kbd>A</kbd></div>
+            </div>
+        </Dialog>
+
+        <Dialog v-model:visible="permissionsOpen" modal :style="{ width: '28rem' }" class="smack-dialog" :closable="true">
+            <template #header>
+                <div class="dialog-title">
+                    <span class="dialog-icon"><i class="pi pi-shield" /></span>
+                    <div>
+                        <strong>Allow SmackChat access</strong>
+                        <small>Location for attendance and alerts for new messages.</small>
+                    </div>
+                </div>
+            </template>
+            <div class="permission-list">
+                <div v-for="item in permissionItems" :key="item.key" class="permission-row">
+                    <span class="permission-icon"><i :class="item.icon" /></span>
+                    <span>
+                        <strong>{{ item.title }}</strong>
+                        <small>{{ item.detail }}</small>
+                    </span>
+                    <Tag :value="permissionLabel(item.state)" :severity="permissionSeverity(item.state)" />
+                </div>
+            </div>
+            <div class="dialog-actions">
+                <Button label="Not now" text severity="secondary" type="button" :disabled="permissionsBusy" @click="skipPermissions" />
+                <Button
+                    label="Allow access"
+                    icon="pi pi-check"
+                    type="button"
+                    :loading="permissionsBusy"
+                    @click="allowPermissions"
+                />
             </div>
         </Dialog>
 

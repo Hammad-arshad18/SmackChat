@@ -285,13 +285,28 @@ export const useOfficeStore = defineStore('office', {
 
             return data;
         },
-        readLocation() {
-            return new Promise((resolve, reject) => {
-                if (!navigator.geolocation) {
-                    reject(new Error('This browser cannot share your location.'));
-                    return;
+        async readLocation() {
+            if (!navigator.geolocation) {
+                throw new Error('This browser cannot share your location.');
+            }
+
+            // High-accuracy GPS often times out indoors. Fall back to network location.
+            try {
+                return await this.probeLocation({ enableHighAccuracy: true, timeout: 10000, maximumAge: 15000 });
+            } catch (first) {
+                if (first?.code === 1) {
+                    throw new Error(first.message);
                 }
 
+                try {
+                    return await this.probeLocation({ enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 });
+                } catch (second) {
+                    throw new Error(second?.message || first?.message || 'Could not read your location.');
+                }
+            }
+        },
+        probeLocation(options) {
+            return new Promise((resolve, reject) => {
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
                         resolve({
@@ -300,8 +315,23 @@ export const useOfficeStore = defineStore('office', {
                             accuracy: position.coords.accuracy,
                         });
                     },
-                    () => reject(new Error('Allow location access to check in or out at the approved place.')),
-                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
+                    (error) => {
+                        const code = error?.code;
+                        let message = 'Could not read your location. Try again near a window or on office Wi‑Fi.';
+
+                        if (code === 1) {
+                            message = 'Location is blocked. Allow it for SmackChat in the browser, and also in macOS System Settings → Privacy & Security → Location Services.';
+                        } else if (code === 2) {
+                            message = 'Location is unavailable right now. Check that Location Services is on for your browser, then try again.';
+                        } else if (code === 3) {
+                            message = 'Location timed out. Move closer to a window or wait a moment, then try check-in again.';
+                        }
+
+                        const wrapped = new Error(message);
+                        wrapped.code = code;
+                        reject(wrapped);
+                    },
+                    options,
                 );
             });
         },

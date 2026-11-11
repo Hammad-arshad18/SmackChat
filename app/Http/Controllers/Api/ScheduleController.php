@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Holiday;
 use App\Services\ScheduleInspector;
+use App\Support\OfficeNetwork;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class ScheduleController extends ApiController
 {
@@ -27,6 +29,8 @@ class ScheduleController extends ApiController
                 'location_latitude' => $workspace->location_latitude,
                 'location_longitude' => $workspace->location_longitude,
                 'location_radius_m' => (int) ($workspace->location_radius_m ?? 250),
+                'location_allowed_ips' => array_values($workspace->location_allowed_ips ?? []),
+                'viewer_ip' => $request->ip(),
                 'today' => $inspector->describe($workspace, now()),
                 'holidays' => $workspace->holidays()->orderBy('observed_on')->get()->map(fn (Holiday $holiday) => [
                     'id' => $holiday->id,
@@ -61,6 +65,8 @@ class ScheduleController extends ApiController
             'location_latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'location_longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'location_radius_m' => ['nullable', 'integer', 'min:25', 'max:100000'],
+            'location_allowed_ips' => ['sometimes', 'nullable', 'array', 'max:50'],
+            'location_allowed_ips.*' => ['string', 'max:64'],
         ]);
 
         $workspace = $this->workspace($request);
@@ -87,7 +93,8 @@ class ScheduleController extends ApiController
         if (array_key_exists('location_restricted', $data)
             || array_key_exists('location_latitude', $data)
             || array_key_exists('location_longitude', $data)
-            || array_key_exists('location_radius_m', $data)) {
+            || array_key_exists('location_radius_m', $data)
+            || array_key_exists('location_allowed_ips', $data)) {
             $restricted = array_key_exists('location_restricted', $data)
                 ? (bool) $data['location_restricted']
                 : (bool) $workspace->location_restricted;
@@ -100,11 +107,36 @@ class ScheduleController extends ApiController
             $radius = array_key_exists('location_radius_m', $data)
                 ? (int) $data['location_radius_m']
                 : (int) ($workspace->location_radius_m ?? 250);
+            $allowedIps = array_key_exists('location_allowed_ips', $data)
+                ? OfficeNetwork::normalize($data['location_allowed_ips'])
+                : OfficeNetwork::normalize($workspace->location_allowed_ips);
+
+            if (array_key_exists('location_allowed_ips', $data)) {
+                $invalid = collect($data['location_allowed_ips'] ?? [])
+                    ->map(fn ($entry) => trim((string) $entry))
+                    ->filter(fn ($entry) => $entry !== '')
+                    ->reject(fn ($entry) => OfficeNetwork::isValidEntry($entry))
+                    ->values()
+                    ->all();
+
+                if ($invalid !== []) {
+                    throw ValidationException::withMessages([
+                        'location_allowed_ips' => ['Use public IPs or CIDR ranges like 203.0.113.10 or 203.0.113.0/24.'],
+                    ]);
+                }
+            }
 
             if ($restricted && ($latitude === null || $longitude === null)) {
                 return response()->json([
-                    'message' => 'Set the approved latitude and longitude before enabling the location restriction.',
-                    'errors' => ['location_latitude' => ['Latitude and longitude are required when location restriction is enabled.']],
+                    'message' => 'Set the approved latitude and longitude before enabling presence check.',
+                    'errors' => ['location_latitude' => ['Latitude and longitude are required when presence check is enabled.']],
+                ], 422);
+            }
+
+            if ($restricted && $allowedIps === []) {
+                return response()->json([
+                    'message' => 'Add at least one office network IP before enabling presence check.',
+                    'errors' => ['location_allowed_ips' => ['Office network IPs are required when presence check is enabled.']],
                 ], 422);
             }
 
@@ -112,6 +144,7 @@ class ScheduleController extends ApiController
             $updates['location_latitude'] = $latitude;
             $updates['location_longitude'] = $longitude;
             $updates['location_radius_m'] = $radius;
+            $updates['location_allowed_ips'] = $allowedIps;
         }
 
         $workspace->update($updates);

@@ -49,8 +49,10 @@ const locationForm = reactive({
     location_latitude: null,
     location_longitude: null,
     location_radius_m: 250,
+    location_allowed_ips_text: '',
 });
 const locating = ref(false);
+const viewerIp = ref('');
 
 const today = computed(() => schedule.value?.today);
 const windowMinutes = computed(() => {
@@ -113,6 +115,15 @@ function applySchedule(next) {
     locationForm.location_latitude = next.location_latitude ?? null;
     locationForm.location_longitude = next.location_longitude ?? null;
     locationForm.location_radius_m = next.location_radius_m ?? 250;
+    locationForm.location_allowed_ips_text = (next.location_allowed_ips || []).join('\n');
+    viewerIp.value = next.viewer_ip || '';
+}
+
+function allowedIpsList() {
+    return locationForm.location_allowed_ips_text
+        .split(/[\n,]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
 }
 
 async function save() {
@@ -128,6 +139,7 @@ async function save() {
             location_latitude: locationForm.location_latitude,
             location_longitude: locationForm.location_longitude,
             location_radius_m: locationForm.location_radius_m,
+            location_allowed_ips: allowedIpsList(),
         });
         applySchedule(data.schedule);
 
@@ -213,6 +225,31 @@ async function useMyLocation() {
     } finally {
         locating.value = false;
     }
+}
+
+function useViewerIp() {
+    if (!viewerIp.value) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Network',
+            detail: 'Could not read this device’s public IP. Open Schedule from the office Wi‑Fi and try again.',
+            life: 3500,
+        });
+        return;
+    }
+
+    const existing = allowedIpsList();
+    if (!existing.includes(viewerIp.value)) {
+        existing.push(viewerIp.value);
+        locationForm.location_allowed_ips_text = existing.join('\n');
+    }
+
+    toast.add({
+        severity: 'success',
+        summary: 'Office IP added',
+        detail: `${viewerIp.value} will be allowed after you save.`,
+        life: 2800,
+    });
 }
 </script>
 
@@ -426,14 +463,14 @@ async function useMyLocation() {
 
             <section class="panel location-panel">
                 <header class="card-head">
-                    <div><p class="card-kicker">Geofence</p><h2>Check-in location</h2></div>
+                    <div><p class="card-kicker">Presence</p><h2>Office check-in guard</h2></div>
                     <Tag :value="locationForm.location_restricted ? 'On' : 'Off by default'" :severity="locationForm.location_restricted ? 'warn' : 'secondary'" />
                 </header>
-                <p class="fine">Keep this off unless people should only check in and out near an approved place. Admins enable it manually.</p>
+                <p class="fine">When on, check-in and checkout need both GPS inside the radius and the office public IP. Either alone is too easy to fake from home.</p>
                 <div class="switch-row">
                     <div>
-                        <strong>Restrict check-in and checkout</strong>
-                        <small>Requires a shared device location inside the radius you set.</small>
+                        <strong>Require office presence</strong>
+                        <small>GPS near the pin and connection from an approved office network IP.</small>
                     </div>
                     <ToggleSwitch v-model="locationForm.location_restricted" :disabled="!canEdit" />
                 </div>
@@ -463,7 +500,7 @@ async function useMyLocation() {
                         />
                     </div>
                 </div>
-                <div class="field">
+                <div class="field" :class="{ 'is-dimmed': !locationForm.location_restricted }">
                     <label>Allowed radius (meters)</label>
                     <InputNumber
                         v-model="locationForm.location_radius_m"
@@ -474,7 +511,38 @@ async function useMyLocation() {
                         fluid
                     />
                 </div>
-                <div class="dialog-actions" style="justify-content: flex-start; margin-top: 4px;">
+                <div class="field" :class="{ 'is-dimmed': !locationForm.location_restricted }">
+                    <label>Approved office IPs</label>
+                    <Textarea
+                        v-model="locationForm.location_allowed_ips_text"
+                        rows="4"
+                        auto-resize
+                        :disabled="!canEdit || !locationForm.location_restricted"
+                        placeholder="One public IP or CIDR per line"
+                        fluid
+                    />
+                    <div class="presence-help">
+                        <p><strong>How to get the office IP</strong></p>
+                        <ol>
+                            <li>Connect this device to the <em>office Wi‑Fi</em> (not mobile data, not home Wi‑Fi).</li>
+                            <li>Open this Schedule page here, then tap <strong>Add this device’s IP</strong>.</li>
+                            <li>Save the schedule. That public IP is what SmackChat sees on check-in.</li>
+                        </ol>
+                        <p>
+                            Prefer a whole office range? Ask IT for the office WAN/CIDR (example <code>203.0.113.0/24</code>) and paste one entry per line.
+                        </p>
+                        <p v-if="viewerIp" class="presence-help-current">
+                            This device is currently seen as <code>{{ viewerIp }}</code>
+                            <template v-if="viewerIp === '127.0.0.1' || viewerIp === '::1'">
+                                — local testing only. On a live site this will be your real office public IP.
+                            </template>
+                        </p>
+                        <p v-else class="presence-help-current">
+                            Could not read this device’s IP yet. Refresh the page while on office Wi‑Fi.
+                        </p>
+                    </div>
+                </div>
+                <div class="dialog-actions" style="justify-content: flex-start; margin-top: 4px; gap: 8px;">
                     <Button
                         v-if="canEdit"
                         type="button"
@@ -486,6 +554,17 @@ async function useMyLocation() {
                         :loading="locating"
                         :disabled="!locationForm.location_restricted"
                         @click="useMyLocation"
+                    />
+                    <Button
+                        v-if="canEdit"
+                        type="button"
+                        label="Add this device’s IP"
+                        icon="pi pi-wifi"
+                        severity="secondary"
+                        outlined
+                        size="small"
+                        :disabled="!locationForm.location_restricted || !viewerIp"
+                        @click="useViewerIp"
                     />
                 </div>
             </section>

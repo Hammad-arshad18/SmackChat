@@ -61,6 +61,7 @@ class WorkspaceController extends ApiController
                 'location_latitude' => $workspace->location_latitude,
                 'location_longitude' => $workspace->location_longitude,
                 'location_radius_m' => (int) ($workspace->location_radius_m ?? 250),
+                'location_allowed_ips' => array_values($workspace->location_allowed_ips ?? []),
                 'plan_activated_at' => optional($workspace->plan_activated_at)?->toIso8601String(),
             ],
         ]);
