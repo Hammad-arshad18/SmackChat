@@ -78,7 +78,7 @@ const note = computed(() => {
     if (office.today?.holiday_name) return `Holiday · ${office.today.holiday_name}`;
     if (office.today?.non_working_day) return 'Outside the working week';
     if (office.today?.outside_hours) return 'Outside scheduled hours';
-    if (office.workspace?.location_restricted) return 'Location check required for check-in and checkout';
+    if (office.workspace?.location_restricted) return 'Office GPS and network required for check-in and checkout';
     return '';
 });
 const eventLabel = computed(() => ({

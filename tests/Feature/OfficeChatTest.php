@@ -155,31 +155,214 @@ class OfficeChatTest extends TestCase
             'location_latitude' => 25.2048,
             'location_longitude' => 55.2708,
             'location_radius_m' => 200,
+            'location_allowed_ips' => ['203.0.113.10'],
         ])->assertOk()->assertJsonPath('schedule.location_restricted', true);
 
         $workspace->refresh();
         $this->assertTrue((bool) $workspace->location_restricted);
 
         $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.10'])
             ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
             ->assertStatus(422);
 
         $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.10'])
             ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
                 'action' => 'check_in',
                 'latitude' => 24.4539,
                 'longitude' => 54.3773,
             ])
-            ->assertStatus(422);
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['location']);
 
         $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '198.51.100.20'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
+                'action' => 'check_in',
+                'latitude' => 25.2048,
+                'longitude' => 55.2708,
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['network']);
+
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.10'])
             ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
                 'action' => 'check_in',
                 'latitude' => 25.2048,
                 'longitude' => 55.2708,
             ])
             ->assertOk()
-            ->assertJsonPath('day.location_verified', true);
+            ->assertJsonPath('day.location_verified', true)
+            ->assertJsonPath('day.network_verified', true)
+            ->assertJsonPath('day.presence_verified', true)
+            ->assertJsonPath('day.check_in_ip', '203.0.113.10');
+
+        Carbon::setTestNow();
+    }
+
+    public function test_location_restriction_requires_office_ips_before_enabling(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        $this->actingAs($owner, 'sanctum')->putJson("/api/workspaces/{$workspace->slug}/schedule", [
+            'timezone' => 'UTC',
+            'work_start' => '09:00',
+            'work_end' => '17:00',
+            'work_days' => [1, 2, 3, 4, 5],
+            'location_restricted' => true,
+            'location_latitude' => 25.2048,
+            'location_longitude' => 55.2708,
+            'location_radius_m' => 200,
+            'location_allowed_ips' => [],
+        ])->assertStatus(422)->assertJsonValidationErrors(['location_allowed_ips']);
+    }
+
+    public function test_location_restriction_rejects_incomplete_workspace_coordinates(): void
+    {
+        $owner = $this->openOffice();
+        $worker = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
+
+        $workspace->forceFill([
+            'location_restricted' => true,
+            'location_latitude' => null,
+            'location_longitude' => null,
+            'location_radius_m' => 200,
+            'location_allowed_ips' => ['203.0.113.10'],
+        ])->save();
+
+        Carbon::setTestNow(Carbon::parse('2026-11-04 09:00:00', 'UTC'));
+
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.10'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
+                'action' => 'check_in',
+                'latitude' => 25.2048,
+                'longitude' => 55.2708,
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['location']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_presence_guard_covers_full_shift_and_blocks_bad_checkout(): void
+    {
+        $owner = $this->openOffice();
+        $worker = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
+
+        $this->actingAs($owner, 'sanctum')->putJson("/api/workspaces/{$workspace->slug}/schedule", [
+            'timezone' => 'UTC',
+            'work_start' => '09:00',
+            'work_end' => '17:00',
+            'work_days' => [1, 2, 3, 4, 5],
+            'location_restricted' => true,
+            'location_latitude' => 25.2048,
+            'location_longitude' => 55.2708,
+            'location_radius_m' => 200,
+            'location_allowed_ips' => ['203.0.113.0/24'],
+        ])->assertOk();
+
+        Carbon::setTestNow(Carbon::parse('2026-11-04 09:00:00', 'UTC'));
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.44'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
+                'action' => 'check_in',
+                'latitude' => 25.2048,
+                'longitude' => 55.2708,
+            ])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'open')
+            ->assertJsonPath('day.check_in_ip', '203.0.113.44');
+
+        Carbon::setTestNow(Carbon::parse('2026-11-04 12:00:00', 'UTC'));
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '198.51.100.9'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_in'])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'on_break');
+
+        Carbon::setTestNow(Carbon::parse('2026-11-04 12:30:00', 'UTC'));
+        $this->actingAs($worker, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_out'])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'open');
+
+        Carbon::setTestNow(Carbon::parse('2026-11-04 17:00:00', 'UTC'));
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '198.51.100.9'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
+                'action' => 'check_out',
+                'latitude' => 25.2048,
+                'longitude' => 55.2708,
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['network']);
+
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.44'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
+                'action' => 'check_out',
+                'latitude' => 24.4539,
+                'longitude' => 54.3773,
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['location']);
+
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.44'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['location']);
+
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '203.0.113.44'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", [
+                'action' => 'check_out',
+                'latitude' => 25.2048,
+                'longitude' => 55.2708,
+            ])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'completed')
+            ->assertJsonPath('day.work_minutes', 450)
+            ->assertJsonPath('day.break_minutes', 30)
+            ->assertJsonPath('day.check_out_ip', '203.0.113.44');
+
+        Carbon::setTestNow();
+    }
+
+    public function test_unrestricted_attendance_still_checks_in_and_out_without_presence(): void
+    {
+        $owner = $this->openOffice();
+        $worker = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
+
+        $this->assertFalse((bool) $workspace->location_restricted);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-05 09:00:00', 'UTC'));
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '198.51.100.7'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'open')
+            ->assertJsonPath('day.check_in_ip', '198.51.100.7')
+            ->assertJsonPath('day.presence_verified', false);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-05 17:00:00', 'UTC'));
+        $this->actingAs($worker, 'sanctum')
+            ->withServerVariables(['REMOTE_ADDR' => '198.51.100.7'])
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'completed')
+            ->assertJsonPath('day.check_out_ip', '198.51.100.7')
+            ->assertJsonPath('day.work_minutes', 480);
 
         Carbon::setTestNow();
     }

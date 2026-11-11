@@ -1634,6 +1634,39 @@ kbd {
     line-height: 1.5;
 }
 
+.presence-help {
+    margin-top: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--primary-soft) 55%, transparent);
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.presence-help strong {
+    color: var(--ink);
+}
+
+.presence-help ol {
+    margin: 8px 0 10px;
+    padding-left: 1.2rem;
+    display: grid;
+    gap: 4px;
+}
+
+.presence-help code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.86em;
+    color: var(--ink);
+}
+
+.presence-help-current {
+    margin: 8px 0 0;
+    color: var(--ink);
+}
+
 .page-tools {
     display: flex;
     align-items: center;
@@ -1969,6 +2002,46 @@ kbd {
     height: 38px;
     flex: none;
     border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: var(--primary-soft);
+    color: var(--primary);
+}
+
+.permission-list {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.permission-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--canvas) 70%, transparent);
+}
+
+.permission-row strong {
+    display: block;
+    font-size: 0.95rem;
+}
+
+.permission-row small {
+    display: block;
+    color: var(--muted);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    margin-top: 2px;
+}
+
+.permission-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
     display: grid;
     place-items: center;
     background: var(--primary-soft);

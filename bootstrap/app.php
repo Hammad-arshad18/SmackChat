@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\EnsureWorkspaceMember;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -15,6 +16,9 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->statefulApi();
+        // Hostinger (and most reverse proxies) forward the real client IP.
+        // Office presence checks depend on Request::ip() seeing that address.
+        $middleware->trustProxies(at: '*');
         $middleware->redirectGuestsTo(function (Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return null;
@@ -23,7 +27,7 @@ return Application::configure(basePath: dirname(__DIR__))
             return '/login';
         });
         $middleware->alias([
-            'workspace' => \App\Http\Middleware\EnsureWorkspaceMember::class,
+            'workspace' => EnsureWorkspaceMember::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

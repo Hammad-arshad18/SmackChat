@@ -53,11 +53,17 @@ class AttendanceController extends ApiController
         ]);
 
         $workspace = $this->workspace($request);
-        $result = $attendance->punch($workspace, $request->user(), $data['action'], [
-            'latitude' => $data['latitude'] ?? null,
-            'longitude' => $data['longitude'] ?? null,
-            'accuracy' => $data['accuracy'] ?? null,
-        ]);
+        $result = $attendance->punch(
+            $workspace,
+            $request->user(),
+            $data['action'],
+            [
+                'latitude' => $data['latitude'] ?? null,
+                'longitude' => $data['longitude'] ?? null,
+                'accuracy' => $data['accuracy'] ?? null,
+            ],
+            $request->ip(),
+        );
         $day = $attendance->presentDay($result['day']);
         $ably->publishShift($workspace->id, $request->user()->id, $day);
 

@@ -8,6 +8,7 @@ use App\Models\Channel;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Support\Duration;
+use App\Support\OfficeNetwork;
 use App\Support\RichText;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -44,14 +45,14 @@ class AttendanceService
             ->first();
     }
 
-    public function punch(Workspace $workspace, User $user, string $action, ?array $location = null): array
+    public function punch(Workspace $workspace, User $user, string $action, ?array $location = null, ?string $clientIp = null): array
     {
-        return DB::transaction(function () use ($workspace, $user, $action, $location) {
+        return DB::transaction(function () use ($workspace, $user, $action, $location, $clientIp) {
             $day = $this->today($workspace, $user);
             $now = now();
 
             if ($action === 'check_in') {
-                $coordinates = $this->requireLocation($workspace, $location, 'check in');
+                $presence = $this->requirePresence($workspace, $location, $clientIp, 'check in');
 
                 if ($day && in_array($day->status, ['open', 'on_break', 'completed'], true) && $day->work_date->toDateString() === $now->timezone($workspace->timezone)->toDateString()) {
                     throw ValidationException::withMessages([
@@ -73,8 +74,9 @@ class AttendanceService
                     'user_id' => $user->id,
                     'work_date' => $context['date'],
                     'check_in_at' => $now,
-                    'check_in_latitude' => $coordinates['latitude'] ?? null,
-                    'check_in_longitude' => $coordinates['longitude'] ?? null,
+                    'check_in_latitude' => $presence['latitude'] ?? null,
+                    'check_in_longitude' => $presence['longitude'] ?? null,
+                    'check_in_ip' => $presence['ip'] ?? $this->safeIp($clientIp),
                     'status' => 'open',
                     'outside_hours' => $context['outside_hours'],
                     'non_working_day' => $context['non_working_day'],
@@ -115,14 +117,15 @@ class AttendanceService
                 throw ValidationException::withMessages(['action' => 'Unknown attendance action.']);
             }
 
-            $coordinates = $this->requireLocation($workspace, $location, 'check out');
+            $presence = $this->requirePresence($workspace, $location, $clientIp, 'check out');
             $this->event($day, 'check_out', $now);
             $totals = $this->calculator->summarize($day->events()->get(), $now);
             $checkoutContext = $this->inspector->describe($workspace, $now);
             $day->update([
                 'check_out_at' => $now,
-                'check_out_latitude' => $coordinates['latitude'] ?? null,
-                'check_out_longitude' => $coordinates['longitude'] ?? null,
+                'check_out_latitude' => $presence['latitude'] ?? null,
+                'check_out_longitude' => $presence['longitude'] ?? null,
+                'check_out_ip' => $presence['ip'] ?? $this->safeIp($clientIp),
                 'status' => 'completed',
                 'work_minutes' => $totals['work_minutes'],
                 'break_minutes' => $totals['break_minutes'],
@@ -157,7 +160,13 @@ class AttendanceService
             'check_in_longitude' => $day->check_in_longitude,
             'check_out_latitude' => $day->check_out_latitude,
             'check_out_longitude' => $day->check_out_longitude,
+            'check_in_ip' => $day->check_in_ip,
+            'check_out_ip' => $day->check_out_ip,
             'location_verified' => $day->check_in_latitude !== null && $day->check_in_longitude !== null,
+            'network_verified' => $day->check_in_ip !== null,
+            'presence_verified' => $day->check_in_latitude !== null
+                && $day->check_in_longitude !== null
+                && $day->check_in_ip !== null,
             'work_minutes' => $counted,
             'break_minutes' => $break,
             'counted_minutes' => $counted,
@@ -182,10 +191,31 @@ class AttendanceService
         ];
     }
 
-    private function requireLocation(Workspace $workspace, ?array $location, string $verb): ?array
+    /**
+     * When restriction is on, require office GPS radius AND office network IP.
+     * Either signal alone is too easy to fake from home.
+     *
+     * @return array{latitude?: float, longitude?: float, ip?: string}|null
+     */
+    private function requirePresence(Workspace $workspace, ?array $location, ?string $clientIp, string $verb): ?array
     {
         if (! $workspace->location_restricted) {
-            return null;
+            $ip = $this->safeIp($clientIp);
+
+            return $ip ? ['ip' => $ip] : null;
+        }
+
+        if ($workspace->location_latitude === null || $workspace->location_longitude === null) {
+            throw ValidationException::withMessages([
+                'location' => 'This workspace has presence check turned on, but no approved place is set yet.',
+            ]);
+        }
+
+        $allowedIps = OfficeNetwork::normalize($workspace->location_allowed_ips);
+        if ($allowedIps === []) {
+            throw ValidationException::withMessages([
+                'network' => 'This workspace has presence check turned on, but no office network IPs are set yet.',
+            ]);
         }
 
         $latitude = $location['latitude'] ?? null;
@@ -204,6 +234,7 @@ class AttendanceService
             throw ValidationException::withMessages(['location' => 'Those coordinates are not valid.']);
         }
 
+        $radius = max(1, (int) ($workspace->location_radius_m ?? 250));
         $distance = $this->distanceInMeters(
             $latitude,
             $longitude,
@@ -211,13 +242,33 @@ class AttendanceService
             (float) $workspace->location_longitude,
         );
 
-        if ($distance > (int) $workspace->location_radius_m) {
+        if ($distance > $radius) {
             throw ValidationException::withMessages([
-                'location' => 'You are about '.round($distance).'m away from the approved location. The limit is '.$workspace->location_radius_m.'m.',
+                'location' => 'You are about '.round($distance).'m away from the approved location. The limit is '.$radius.'m.',
             ]);
         }
 
-        return ['latitude' => $latitude, 'longitude' => $longitude];
+        $ip = $this->safeIp($clientIp);
+        if (! OfficeNetwork::allows($ip, $allowedIps)) {
+            throw ValidationException::withMessages([
+                'network' => 'Join the office network before you '.$verb.'. Your connection is not on an approved IP.',
+            ]);
+        }
+
+        return [
+            'latitude' => $latitude,
+            'longitude' => $longitude,
+            'ip' => $ip,
+        ];
+    }
+
+    private function safeIp(?string $ip): ?string
+    {
+        if (! is_string($ip) || $ip === '') {
+            return null;
+        }
+
+        return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : null;
     }
 
     private function distanceInMeters(float $lat1, float $lon1, float $lat2, float $lon2): float
