@@ -22,6 +22,11 @@ export default defineConfig({
             '@': fileURLToPath(new URL('./resources/js', import.meta.url)),
         },
     },
+    // On-device AI runs in an ES module worker (`resources/js/workers/ai.worker.js`)
+    // so it can code-split the Transformers.js fallback into its own async chunk.
+    worker: {
+        format: 'es',
+    },
     server: {
         watch: {
             ignored: ['**/storage/framework/views/**'],

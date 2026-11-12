@@ -4,8 +4,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
 import {
+    ai,
+    aiReadyBadge,
     clearCachedThreadSummary,
-    getAiCapabilities,
+    initAiCapabilities,
+    isDownloadRequired,
+    prepareModel,
     readCachedThreadSummary,
     summarizeMessagesLocally,
     threadSummaryFingerprint,
@@ -59,18 +63,18 @@ const reactionPop = ref(null);
 const channelForm = reactive({ topic: '', description: '' });
 const arriving = ref(new Set());
 const emojis = ['👍', '❤️', '😄', '🎉', '✅', '👀', '🚀', '🔥'];
-const canSummarize = ref(false);
 const channelSummary = ref('');
 const channelSummaryOpen = ref(true);
 const channelSummaryBusy = ref(false);
-const channelSummaryProgress = ref(null);
 const threadSummary = ref('');
 const threadSummaryOpen = ref(true);
 const threadSummaryBusy = ref(false);
-const threadSummaryProgress = ref(null);
 const threadSummaryHidden = ref(false);
 const threadSummaryFromCache = ref(false);
 const threadSummaryCachedAt = ref(null);
+const downloadConfirm = ref(false);
+const downloadBusy = ref(false);
+const pendingDownloadAction = ref(null);
 let poll;
 let polling = true;
 let stopTyping = () => {};
@@ -133,16 +137,90 @@ const showThreadSummarizeCta = computed(() => {
         return true;
     }
 
-    return replies.value.length > 0;
+    return replies.value.length >= 3;
 });
+const aiReady = computed(() => ai.engine !== 'unavailable');
+const aiBadgeLabel = computed(() => aiReadyBadge());
 
 function explainSummarizeUnavailable() {
     toast.add({
         severity: 'info',
         summary: 'On-device AI',
-        detail: 'Chrome Built-in AI is needed to summarize on this device. Nothing is sent to the server.',
+        detail: 'On-device summarization is not available in this browser. Nothing is sent to the server.',
         life: 4200,
     });
+}
+
+async function ensureSummaryReady(action) {
+    try {
+        await initAiCapabilities();
+    } catch {
+        explainSummarizeUnavailable();
+        return false;
+    }
+
+    if (ai.engine === 'unavailable') {
+        explainSummarizeUnavailable();
+        return false;
+    }
+
+    if (ai.modelState === 'ready') {
+        return true;
+    }
+
+    if (ai.engine === 'gemini-nano') {
+        try {
+            await prepareModel();
+            return ai.modelState === 'ready';
+        } catch (error) {
+            if (!isDownloadRequired(error)) {
+                toast.add({
+                    severity: 'warn',
+                    summary: 'On-device AI',
+                    detail: errorText(error, 'Could not set up on-device AI.'),
+                    life: 3800,
+                });
+                return false;
+            }
+        }
+    }
+
+    pendingDownloadAction.value = action;
+    downloadConfirm.value = true;
+    return false;
+}
+
+async function confirmDownload() {
+    if (downloadBusy.value) {
+        return;
+    }
+
+    downloadBusy.value = true;
+
+    try {
+        await prepareModel();
+        downloadConfirm.value = false;
+        const action = pendingDownloadAction.value;
+        pendingDownloadAction.value = null;
+
+        if (ai.modelState === 'ready' && action) {
+            await action();
+        }
+    } catch (error) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Offline AI',
+            detail: errorText(error, 'Could not start the offline AI model on this device.'),
+            life: 4600,
+        });
+    } finally {
+        downloadBusy.value = false;
+    }
+}
+
+function cancelDownload() {
+    pendingDownloadAction.value = null;
+    downloadConfirm.value = false;
 }
 
 watch(current, (channel) => {
@@ -382,7 +460,6 @@ function dismissChannelSummary() {
     channelSummaryRun += 1;
     channelSummary.value = '';
     channelSummaryBusy.value = false;
-    channelSummaryProgress.value = null;
     channelSummaryOpen.value = true;
 }
 
@@ -390,7 +467,6 @@ function resetThreadSummaryUi() {
     threadSummaryRun += 1;
     threadSummary.value = '';
     threadSummaryBusy.value = false;
-    threadSummaryProgress.value = null;
     threadSummaryOpen.value = true;
     threadSummaryHidden.value = false;
     threadSummaryFromCache.value = false;
@@ -400,7 +476,6 @@ function resetThreadSummaryUi() {
 function dismissThreadSummary() {
     threadSummaryRun += 1;
     threadSummaryBusy.value = false;
-    threadSummaryProgress.value = null;
     threadSummaryHidden.value = true;
 }
 
@@ -415,7 +490,6 @@ function applyCachedThreadSummary(entry) {
     threadSummaryFromCache.value = true;
     threadSummaryCachedAt.value = entry.savedAt || null;
     threadSummaryBusy.value = false;
-    threadSummaryProgress.value = null;
 
     return true;
 }
@@ -477,11 +551,6 @@ async function summarizeChannel() {
         return;
     }
 
-    if (!canSummarize.value) {
-        explainSummarizeUnavailable();
-        return;
-    }
-
     if (!channelHasSummaryMaterial.value) {
         toast.add({
             severity: 'info',
@@ -492,9 +561,12 @@ async function summarizeChannel() {
         return;
     }
 
+    if (!(await ensureSummaryReady(() => summarizeChannel()))) {
+        return;
+    }
+
     const token = ++channelSummaryRun;
     channelSummaryBusy.value = true;
-    channelSummaryProgress.value = null;
     channelSummaryOpen.value = true;
     channelSummary.value = '';
 
@@ -513,11 +585,6 @@ async function summarizeChannel() {
                 onChunk: (chunk) => {
                     if (token === channelSummaryRun) {
                         channelSummary.value = chunk;
-                    }
-                },
-                onDownloadProgress: (percent) => {
-                    if (token === channelSummaryRun) {
-                        channelSummaryProgress.value = percent;
                     }
                 },
             },
@@ -539,7 +606,6 @@ async function summarizeChannel() {
     } finally {
         if (token === channelSummaryRun) {
             channelSummaryBusy.value = false;
-            channelSummaryProgress.value = null;
         }
     }
 }
@@ -554,11 +620,6 @@ async function summarizeThread({ force = false } = {}) {
         return;
     }
 
-    if (!canSummarize.value) {
-        explainSummarizeUnavailable();
-        return;
-    }
-
     if (!threadHasSummaryMaterial.value && !messagePlainForAi(thread.value)) {
         toast.add({
             severity: 'info',
@@ -569,9 +630,12 @@ async function summarizeThread({ force = false } = {}) {
         return;
     }
 
+    if (!(await ensureSummaryReady(() => summarizeThread({ force })))) {
+        return;
+    }
+
     const token = ++threadSummaryRun;
     threadSummaryBusy.value = true;
-    threadSummaryProgress.value = null;
     threadSummaryOpen.value = true;
     threadSummaryHidden.value = false;
     threadSummaryFromCache.value = false;
@@ -586,11 +650,6 @@ async function summarizeThread({ force = false } = {}) {
                 onChunk: (chunk) => {
                     if (token === threadSummaryRun) {
                         threadSummary.value = chunk;
-                    }
-                },
-                onDownloadProgress: (percent) => {
-                    if (token === threadSummaryRun) {
-                        threadSummaryProgress.value = percent;
                     }
                 },
             },
@@ -619,7 +678,6 @@ async function summarizeThread({ force = false } = {}) {
     } finally {
         if (token === threadSummaryRun) {
             threadSummaryBusy.value = false;
-            threadSummaryProgress.value = null;
         }
     }
 }
@@ -1151,10 +1209,9 @@ function schedulePoll() {
 
 onMounted(async () => {
     try {
-        const capabilities = await getAiCapabilities();
-        canSummarize.value = capabilities.canSummarize;
+        await initAiCapabilities();
     } catch {
-        canSummarize.value = false;
+        /* on-device AI stays hidden */
     }
 
     await load();
@@ -1200,13 +1257,15 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="chat-tools">
+                <span v-if="aiBadgeLabel" class="ai-ready-badge chat-ai-badge">{{ aiBadgeLabel }}</span>
                 <Button
+                    v-if="aiReady"
                     icon="pi pi-sparkles"
                     text
                     rounded
                     :loading="channelSummaryBusy"
                     aria-label="Summarize recent"
-                    v-tooltip.bottom="canSummarize ? 'Summarize recent · on-device' : 'Summarize · needs Chrome Built-in AI'"
+                    v-tooltip.bottom="aiBadgeLabel || 'Summarize Recent · on-device'"
                     @click="summarizeChannel"
                 />
                 <Button icon="pi pi-search" text rounded aria-label="Search conversation" v-tooltip.bottom="'Search this conversation'" @click="openSearch" />
@@ -1266,8 +1325,8 @@ onBeforeUnmount(() => {
                                 />
                             </div>
                         </header>
-                        <p v-if="channelSummaryProgress != null" class="ai-summary-progress">
-                            Downloading local AI: {{ channelSummaryProgress }}%
+                        <p v-if="ai.modelState === 'downloading'" class="ai-summary-progress">
+                            {{ ai.downloadLabel }}
                         </p>
                         <p v-else-if="channelSummaryBusy && !channelSummary" class="ai-summary-progress">
                             Summarizing on this device…
@@ -1471,6 +1530,7 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="thread-head-actions">
                         <Button
+                            v-if="replies.length >= 3"
                             icon="pi pi-sparkles"
                             text
                             rounded
@@ -1478,9 +1538,7 @@ onBeforeUnmount(() => {
                             :loading="threadSummaryBusy"
                             :severity="showThreadSummaryCard ? 'secondary' : undefined"
                             aria-label="Summarize thread"
-                            v-tooltip.bottom="!canSummarize
-                                ? 'Summarize · needs Chrome Built-in AI'
-                                : (showThreadSummaryCard ? 'Refresh thread summary · on-device' : 'Summarize thread · on-device')"
+                            v-tooltip.bottom="aiBadgeLabel || (showThreadSummaryCard ? 'Refresh thread summary · on-device' : 'Summarize thread · on-device')"
                             @click="summarizeThread({ force: !!threadSummary })"
                         />
                         <Button icon="pi pi-times" text rounded aria-label="Close thread" @click="closeThread" />
@@ -1532,8 +1590,8 @@ onBeforeUnmount(() => {
                                 />
                             </div>
                         </header>
-                        <p v-if="threadSummaryProgress != null" class="ai-summary-progress">
-                            Downloading local AI: {{ threadSummaryProgress }}%
+                        <p v-if="ai.modelState === 'downloading'" class="ai-summary-progress">
+                            {{ ai.downloadLabel }}
                         </p>
                         <p v-else-if="threadSummaryBusy && !threadSummary" class="ai-summary-progress">
                             Summarizing on this device…
@@ -1769,6 +1827,40 @@ onBeforeUnmount(() => {
                 </section>
             </div>
         </Drawer>
+
+        <Dialog v-model:visible="downloadConfirm" modal :style="{ width: '28rem' }" class="smack-dialog">
+            <template #header>
+                <div class="dialog-title">
+                    <span class="dialog-icon"><i class="pi pi-download" /></span>
+                    <div><strong>Download Offline AI</strong><small>One-time setup · stays on this device</small></div>
+                </div>
+            </template>
+            <div class="ai-download-dialog">
+                <p>
+                    Download Offline AI ({{ ai.modelSizeHint }})? Downloads once to this device so you can
+                    rewrite, draft, and summarize E2E messages privately offline. If the full model cannot
+                    run here, a smaller one is used automatically.
+                </p>
+                <div v-if="ai.modelState === 'downloading'" class="ai-download-row">
+                    <div class="ai-download-copy">
+                        <i class="pi pi-cloud-download" />
+                        <span>{{ ai.downloadLabel }}</span>
+                    </div>
+                    <ProgressBar :value="ai.downloadPercent" :show-value="false" class="ai-download-bar" />
+                </div>
+                <div class="link-actions">
+                    <Button label="Not now" text severity="secondary" size="small" :disabled="downloadBusy" @click="cancelDownload" />
+                    <Button
+                        label="Download Once & Enable"
+                        icon="pi pi-download"
+                        size="small"
+                        :loading="downloadBusy"
+                        :disabled="ai.modelState === 'downloading'"
+                        @click="confirmDownload"
+                    />
+                </div>
+            </div>
+        </Dialog>
 
         <Dialog v-model:visible="searchOpen" modal :style="{ width: '36rem' }" class="smack-dialog search-dialog">
             <template #header>

@@ -1,8 +1,16 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
+import {
+    ai,
+    aiEngineLabel,
+    initAiCapabilities,
+    prepareModel,
+    redownloadLocalModel,
+    removeDownloadedLocalModel,
+} from '@/ai';
 import api, { errorText } from '@/api';
 import { disablePush, ensurePush } from '@/push';
 import { useAuthStore } from '@/stores/auth';
@@ -22,6 +30,7 @@ const avatarBusy = ref(false);
 const avatarInput = ref(null);
 const logoBusy = ref(false);
 const logoInput = ref(null);
+const aiBusy = ref(false);
 const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Dubai', 'Europe/London', 'America/New_York'];
 const form = reactive({
     name: '',
@@ -51,6 +60,106 @@ const statusPresets = [
 
 const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 const roleLabel = computed(() => (office.workspace?.role || 'member').replace(/^\w/, (letter) => letter.toUpperCase()));
+const aiEngineName = computed(() => aiEngineLabel());
+const aiStatusLabel = computed(() => {
+    if (ai.engine === 'unavailable') {
+        return 'Not supported here';
+    }
+
+    if (ai.modelState === 'ready') {
+        return 'Downloaded & Ready';
+    }
+
+    if (ai.modelState === 'downloading') {
+        return `Downloading ${ai.downloadPercent}%`;
+    }
+
+    return 'Not Downloaded';
+});
+const aiCanDownload = computed(() => ai.engine === 'transformers-local' && ai.modelState === 'not-downloaded');
+const aiCanDelete = computed(() => ai.engine === 'transformers-local' && (ai.modelState === 'ready' || ai.hasLocalCache));
+const aiCanRedownload = computed(() => ai.engine === 'transformers-local' && ai.modelState === 'ready');
+
+onMounted(async () => {
+    try {
+        await initAiCapabilities();
+    } catch {
+        /* the section just reports "not supported" */
+    }
+});
+
+async function downloadAiModel() {
+    if (aiBusy.value) {
+        return;
+    }
+
+    aiBusy.value = true;
+
+    try {
+        await prepareModel();
+        toast.add({
+            severity: 'success',
+            summary: 'Offline AI ready',
+            detail: 'The model is cached on this device. Future sessions reuse it.',
+            life: 3200,
+        });
+    } catch (error) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Offline AI',
+            detail: errorText(error, 'Could not start the offline AI model on this device.'),
+            life: 4600,
+        });
+    } finally {
+        aiBusy.value = false;
+    }
+}
+
+function deleteAiModel() {
+    confirm.require({
+        message: 'Delete the downloaded offline AI model from this device? Your messages are untouched, and you can download it again later.',
+        header: 'Delete downloaded model',
+        icon: 'pi pi-trash',
+        rejectProps: { label: 'Keep it', severity: 'secondary', text: true },
+        acceptProps: { label: 'Delete', severity: 'danger' },
+        accept: async () => {
+            await removeDownloadedLocalModel();
+            toast.add({ severity: 'success', summary: 'Model deleted', detail: 'Disk space is free again.', life: 2600 });
+        },
+    });
+}
+
+function redownloadAiModel() {
+    confirm.require({
+        message: 'Delete the downloaded model and download the fastest one for this browser? The model downloads again, once.',
+        header: 'Re-download offline AI',
+        icon: 'pi pi-refresh',
+        rejectProps: { label: 'Cancel', severity: 'secondary', text: true },
+        acceptProps: { label: 'Re-download', severity: 'primary' },
+        accept: async () => {
+            aiBusy.value = true;
+
+            try {
+                await redownloadLocalModel();
+                toast.add({
+                    severity: 'success',
+                    summary: 'Offline AI ready',
+                    detail: 'The fastest model for this browser is cached on this device.',
+                    life: 3200,
+                });
+            } catch (error) {
+                toast.add({
+                    severity: 'warn',
+                    summary: 'Offline AI',
+                    detail: errorText(error, 'Could not start the offline AI model on this device.'),
+                    life: 4600,
+                });
+            } finally {
+                aiBusy.value = false;
+            }
+        },
+    });
+}
 
 function syncForm() {
     form.name = auth.user.name;
@@ -318,6 +427,66 @@ function leaveWorkspace() {
                 <div class="switch-row">
                     <div><strong>Notifications</strong><small>Alert you for new messages and thread replies, including when SmackChat is closed.</small></div>
                     <ToggleSwitch :model-value="ui.preferences.desktopNotifications" @update:model-value="setNotifications" />
+                </div>
+            </section>
+
+            <section class="panel ai-panel">
+                <header class="card-head">
+                    <div><p class="card-kicker">On-Device AI (Private &amp; E2E Safe)</p><h2>AI that stays on this device</h2></div>
+                    <Tag :value="aiStatusLabel" :severity="ai.modelState === 'ready' ? 'success' : 'secondary'" />
+                </header>
+
+                <div class="detail-rows">
+                    <div><span>Engine</span><strong>{{ aiEngineName }}</strong></div>
+                    <div><span>Status</span><strong>{{ aiStatusLabel }}</strong></div>
+                    <div v-if="ai.engine === 'transformers-local'"><span>Model size</span><strong>{{ ai.modelSizeHint }}</strong></div>
+                    <div><span>Data leaving your device</span><strong>None</strong></div>
+                </div>
+
+                <div v-if="ai.modelState === 'downloading'" class="ai-download-row">
+                    <div class="ai-download-copy">
+                        <i class="pi pi-cloud-download" />
+                        <span>{{ ai.downloadLabel }}</span>
+                    </div>
+                    <ProgressBar :value="ai.downloadPercent" :show-value="false" class="ai-download-bar" />
+                </div>
+
+                <p class="fine">
+                    Rewrites, drafts, and summaries run inside this browser tab. Message text is end-to-end
+                    encrypted and is never sent to the server for AI. Re-downloading picks the fastest model
+                    this browser can run.
+                </p>
+
+                <div class="ai-actions">
+                    <Button
+                        v-if="aiCanDownload"
+                        label="Download Offline AI"
+                        icon="pi pi-download"
+                        size="small"
+                        :loading="aiBusy"
+                        @click="downloadAiModel"
+                    />
+                    <Button
+                        v-if="aiCanRedownload"
+                        label="Delete & Re-download"
+                        icon="pi pi-refresh"
+                        severity="secondary"
+                        outlined
+                        size="small"
+                        :disabled="aiBusy"
+                        @click="redownloadAiModel"
+                    />
+                    <Button
+                        v-if="aiCanDelete"
+                        label="Delete Downloaded Model"
+                        icon="pi pi-trash"
+                        severity="danger"
+                        text
+                        size="small"
+                        :disabled="aiBusy"
+                        @click="deleteAiModel"
+                    />
+                    <span v-if="ai.engine === 'gemini-nano' && ai.modelState === 'ready'" class="ai-ready-badge">⚡ Gemini Nano Ready</span>
                 </div>
             </section>
 

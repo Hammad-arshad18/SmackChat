@@ -15,6 +15,7 @@
         "vite": "^7.0.7"
     },
     "dependencies": {
+        "@huggingface/transformers": "^4.3.2",
         "@primeuix/themes": "^2.0.3",
         "@tiptap/extension-link": "^2.27.3",
         "@tiptap/extension-mention": "^2.27.3",
