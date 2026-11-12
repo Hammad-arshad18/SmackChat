@@ -464,12 +464,6 @@ function leaveWorkspace() {
                     this browser can run.
                 </p>
 
-                <p v-if="ai.isMobile" class="fine">
-                    Phones use the SmolLM2 tiers: Qwen2.5-1.5B is desktop only (12 GB+ RAM recommended)
-                    and stays hidden here, and Qwen2.5-0.5B is skipped because its 151k-token vocabulary
-                    slows mobile token generation.
-                </p>
-
                 <div class="ai-actions">
                     <Button
                         v-if="aiCanDownload"

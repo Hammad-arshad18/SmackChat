@@ -192,11 +192,9 @@ function detectDevice() {
     }
 
     const ua = navigator.userAgent || '';
-    const uaMobile = navigator.userAgentData?.mobile === true;
-
     ai.isIos = /iPad|iPhone|iPod/i.test(ua)
         || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    ai.isMobile = uaMobile || ai.isIos || /Android|iPhone|iPad|Mobile|IEMobile|Opera Mini/i.test(ua);
+    ai.isMobile = ai.isIos || /Android|Mobile|IEMobile|Opera Mini/i.test(ua);
 }
 
 function isSafariBrowser() {
@@ -256,17 +254,19 @@ function hintFor(step) {
 }
 
 function isPrimaryModel(model) {
-    if (ai.isMobile) {
+    if (ai.isIos) {
         return model?.id === LOCAL_MODELS.tiny.id;
     }
 
-    return model?.id === LOCAL_MODELS.large.id;
+    return ai.isMobile
+        ? model?.id === LOCAL_MODELS.small.id
+        : model?.id === LOCAL_MODELS.large.id;
 }
 
 /**
  * Model attempts for this browser, fastest viable backend first.
  *
- * - GPU (WebGPU, 4-bit) when a real adapter exists;
+ * - GPU (WebGPU/q4f16) when a real adapter exists;
  * - NPU or GPU through WebNN when the browser exposes `navigator.ml`;
  * - CPU (WASM) only as the last resort, with small models because a CPU session
  *   at 0.5B is several times slower than SmolLM2-360M.
@@ -296,11 +296,10 @@ function localLadder() {
     }
 
     if (ai.isMobile) {
-        // Phones default to the SmolLM2 tiers: Qwen2.5-0.5B's 151k-token vocabulary makes
-        // decode slower, and the 1.5B tier OOMs mobile tabs.
         return [
-            ...(gpu ? [{ model: LOCAL_MODELS.tiny, device: 'webgpu' }] : []),
-            ...(npu ? [{ model: LOCAL_MODELS.tiny, device: 'webnn-npu' }] : []),
+            ...(gpu ? [{ model: LOCAL_MODELS.small, device: 'webgpu' }] : []),
+            ...(npu ? [{ model: LOCAL_MODELS.small, device: 'webnn-npu' }] : []),
+            { model: LOCAL_MODELS.small, device: 'wasm' },
             { model: LOCAL_MODELS.tiny, device: 'wasm' },
             { model: LOCAL_MODELS.micro, device: 'wasm' },
         ];
@@ -320,11 +319,7 @@ function selectedStep() {
     try {
         const stored = JSON.parse(storageGet(LOCAL_MODEL_KEY) || 'null');
 
-        // The 1.5B tier is desktop-only: never let a stored desktop choice follow a
-        // phone and blow up the tab.
-        const locked = ai.isMobile && stored?.id === LOCAL_MODELS.large.id;
-
-        if (stored?.id && stored?.device && !locked) {
+        if (stored?.id && stored?.device) {
             return {
                 model: {
                     id: stored.id,
@@ -957,9 +952,10 @@ function localInputCap() {
 }
 
 function localMaxTokens(kind = 'write') {
-    // Rewrites are short; summaries and drafts get a little more room. Anything
-    // longer makes small models ramble and stall on phones.
-    return kind === 'rewrite' ? 128 : 256;
+    const ceiling = ai.isIos ? 150 : 200;
+    const wanted = kind === 'write' ? 180 : kind === 'summarize' ? 160 : 140;
+
+    return Math.min(wanted, ceiling);
 }
 
 function capText(text, cap, fromEnd = false) {

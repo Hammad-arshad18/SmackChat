@@ -17,7 +17,7 @@ Do not scan `vendor/` or `node_modules/`. Start in the file map below.
 - Today (`LoungeView`): shift, timer, unread, presence. Attendance heatmap, CSV export, schedule, holidays.
 - Plans: `standard` keeps history `SMACKCHAT_RETENTION_DAYS` (90). `archive` is forever at `SMACKCHAT_ARCHIVE_PRICE_CENTS` (700) per person. Not a real card charge. `smackchat:prune-history` deletes old standard-plan rows.
 - Push (VAPID) and a PWA (`public/manifest.webmanifest`, `public/sw.js`). Theme: light, dark, system.
-- On-device AI (`ai.js`): Chrome Gemini Nano first, otherwise the Transformers.js worker. Rewrite, draft, and summarize run locally; no AI request ever reaches the API. Models are always 4-bit (`model_q4.onnx`) and cached in `transformers-cache`; phones use SmolLM2 (135M/360M), desktops may use Qwen. When a model cannot start, the next candidate runs in a fresh worker. HTML responses send COOP/COEP so WASM inference can use threads.
+- On-device AI (`ai.js`): Chrome Gemini Nano first, otherwise the Transformers.js worker. Rewrite, draft, and summarize run locally; no AI request ever reaches the API. Models download once into `transformers-cache`; when one cannot start (memory/GPU), the next candidate runs in a fresh worker and the choice is remembered.
 
 ## Pages
 
