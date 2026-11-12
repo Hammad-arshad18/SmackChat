@@ -27,6 +27,13 @@ let idleTimer = null;
 let activeRequests = 0;
 let loadingLabel = FALLBACK_MODEL.label;
 const fileProgress = new Map();
+const stats = {
+    modelId: '',
+    device: '',
+    dtype: 'q4',
+    loadTimeMs: 0,
+    tokensPerSec: 0,
+};
 
 function post(message) {
     self.postMessage(message);
@@ -44,12 +51,6 @@ function isSafari() {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
 
     return /safari/i.test(ua) && !/chrome|chromium|crios|fxios|edg|firefox|android/i.test(ua);
-}
-
-function isFirefox() {
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-
-    return /firefox|fxios/i.test(ua);
 }
 
 function reportProgress(info) {
@@ -93,16 +94,6 @@ async function loadPipeline() {
     return loadingPromise;
 }
 
-async function webgpuDtype() {
-    try {
-        const adapter = await navigator.gpu?.requestAdapter?.();
-
-        return adapter?.features?.has('shader-f16') ? 'q4f16' : 'q4';
-    } catch {
-        return 'q4';
-    }
-}
-
 /**
  * Compile the WebGPU shaders and kernels with a one-token run so the user's first
  * real summary or draft does not pay the compilation cost.
@@ -127,9 +118,9 @@ async function buildPipeline() {
     transformers.env.allowLocalModels = false;
     transformers.env.useBrowserCache = true;
 
-    // Safari and Firefox keep a tighter lid on worker memory than Chrome; one wasm thread
+    // iOS and Safari keep a tighter lid on worker memory than Chrome; one wasm thread
     // avoids multiplying the buffers a single session needs.
-    if (device.isIos || isSafari() || isFirefox()) {
+    if (device.isIos || isSafari()) {
         try {
             transformers.env.backends.onnx.wasm.numThreads = 1;
         } catch {
@@ -138,19 +129,37 @@ async function buildPipeline() {
     }
 
     const active = activeSpec();
+    const requested = active.device;
+    const runtime = requested === 'webgpu'
+        ? 'webgpu'
+        : requested.startsWith('webnn')
+            ? 'webnn'
+            : 'wasm';
+
     loadingLabel = active.modelLabel;
     fileProgress.clear();
 
     const options = {
-        dtype: active.device === 'webgpu' ? await webgpuDtype() : 'q4',
-        device: active.device,
+        // Always 4-bit: leaving dtype undefined downloads fp32 on WebGPU and q8 on WASM.
+        dtype: 'q4',
+        // Explicit device: Transformers.js would otherwise default to 'wasm'.
+        device: runtime,
         progress_callback: reportProgress,
     };
 
-    if (active.device !== 'webgpu') {
-        // WASM sessions are the memory-constrained path: skip ORT's pre-allocated arena
-        // and per-shape memory pattern so the model fits on low-memory machines.
+    if (runtime === 'webnn') {
         options.session_options = {
+            executionProviders: [
+                { name: 'webnn', deviceType: requested === 'webnn-npu' ? 'npu' : 'gpu' },
+                'wasm',
+            ],
+        };
+    } else if (runtime === 'wasm') {
+        options.session_options = {
+            // Mobile big.LITTLE CPUs stall when ORT opens a thread per core.
+            intraOpNumThreads: device.isIos ? 1 : 4,
+            // WASM sessions are the memory-constrained path: skip ORT's pre-allocated
+            // arena and per-shape memory pattern so the model fits on low-memory phones.
             enableCpuMemArena: false,
             enableMemPattern: false,
         };
@@ -159,15 +168,23 @@ async function buildPipeline() {
     post({
         type: 'download-progress',
         percent: 0,
-        statusText: `Loading ${active.modelLabel} on this device…`,
+        statusText: `Loading ${active.modelLabel} on ${runtime}…`,
     });
 
+    const startedAt = performance.now();
     activePipeline = await transformers.pipeline('text-generation', active.modelId, options);
+
+    stats.modelId = active.modelId;
+    stats.device = requested;
+    stats.dtype = options.dtype;
+    stats.loadTimeMs = Math.round(performance.now() - startedAt);
+
+    console.info('[SmackChat AI] model ready', { ...stats });
 
     post({ type: 'download-complete' });
     scheduleIdleDispose();
 
-    if (active.device === 'webgpu') {
+    if (runtime === 'webgpu') {
         // Fire and forget: generation calls queue behind it, but the badge turns ready now.
         warmUp(activePipeline);
     }
@@ -221,15 +238,17 @@ async function disposePipeline() {
 }
 
 function clampTokens(value) {
-    const tokens = Number(value) || 220;
+    const tokens = Number(value) || 128;
 
-    return Math.max(32, Math.min(512, Math.round(tokens)));
+    return Math.max(32, Math.min(256, Math.round(tokens)));
 }
 
 async function generate({ requestId, messages, maxNewTokens, maxChars }) {
     activeRequests += 1;
     clearTimeout(idleTimer);
     idleTimer = null;
+
+    let tokens = 0;
 
     try {
         const pipeline = await loadPipeline();
@@ -246,6 +265,9 @@ async function generate({ requestId, messages, maxNewTokens, maxChars }) {
         const streamer = new TextStreamer(pipeline.tokenizer, {
             skip_prompt: true,
             skip_special_tokens: true,
+            token_callback_function: () => {
+                tokens += 1;
+            },
             callback_function: (text) => {
                 if (!text) {
                     return;
@@ -256,10 +278,26 @@ async function generate({ requestId, messages, maxNewTokens, maxChars }) {
             },
         });
 
+        const startedAt = performance.now();
+
         const output = await pipeline(trimmed, {
             max_new_tokens: clampTokens(maxNewTokens),
             do_sample: false,
+            repetition_penalty: 1.1,
             streamer,
+        });
+
+        const elapsedMs = Math.max(1, performance.now() - startedAt);
+        stats.tokensPerSec = Math.round((tokens / elapsedMs) * 1000 * 10) / 10;
+
+        console.info('[SmackChat AI] generation', {
+            modelId: stats.modelId || activeSpec().modelId,
+            device: stats.device || activeSpec().device,
+            dtype: stats.dtype,
+            loadTimeMs: stats.loadTimeMs,
+            tokensPerSec: stats.tokensPerSec,
+            tokens,
+            elapsedMs: Math.round(elapsedMs),
         });
 
         const generated = output?.[0]?.generated_text;
@@ -279,10 +317,11 @@ self.addEventListener('message', async (event) => {
 
     if (data.type === 'init') {
         device = { isIos: !!data.isIos };
+        const requested = String(data.device || 'wasm');
         spec = {
             modelId: String(data.modelId || FALLBACK_MODEL.id),
             modelLabel: String(data.modelLabel || FALLBACK_MODEL.label),
-            device: data.device === 'webgpu' ? 'webgpu' : 'wasm',
+            device: ['webgpu', 'webnn-npu', 'webnn-gpu'].includes(requested) ? requested : 'wasm',
         };
         return;
     }

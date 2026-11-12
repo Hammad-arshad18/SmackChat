@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\CrossOriginIsolation;
 use App\Http\Middleware\EnsureWorkspaceMember;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -15,6 +16,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Cross-origin isolation for the app shell: enables SharedArrayBuffer so the
+        // on-device AI worker can use multi-threaded SIMD WASM without WebGPU.
+        $middleware->append(CrossOriginIsolation::class);
         $middleware->statefulApi();
         // Hostinger (and most reverse proxies) forward the real client IP.
         // Office presence checks depend on Request::ip() seeing that address.

@@ -5,6 +5,7 @@ import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
 import {
     ai,
+    aiComputeLabel,
     aiEngineLabel,
     initAiCapabilities,
     prepareModel,
@@ -61,6 +62,7 @@ const statusPresets = [
 const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 const roleLabel = computed(() => (office.workspace?.role || 'member').replace(/^\w/, (letter) => letter.toUpperCase()));
 const aiEngineName = computed(() => aiEngineLabel());
+const aiCompute = computed(() => aiComputeLabel());
 const aiStatusLabel = computed(() => {
     if (ai.engine === 'unavailable') {
         return 'Not supported here';
@@ -438,10 +440,15 @@ function leaveWorkspace() {
 
                 <div class="detail-rows">
                     <div><span>Engine</span><strong>{{ aiEngineName }}</strong></div>
+                    <div><span>Compute</span><strong>{{ aiCompute }}</strong></div>
                     <div><span>Status</span><strong>{{ aiStatusLabel }}</strong></div>
                     <div v-if="ai.engine === 'transformers-local'"><span>Model size</span><strong>{{ ai.modelSizeHint }}</strong></div>
                     <div><span>Data leaving your device</span><strong>None</strong></div>
                 </div>
+
+                <p v-if="ai.engine === 'transformers-local' && ai.backend === 'wasm'" class="fine">
+                    This browser is not offering a GPU or NPU to web apps, so inference runs on the CPU.
+                </p>
 
                 <div v-if="ai.modelState === 'downloading'" class="ai-download-row">
                     <div class="ai-download-copy">
@@ -455,6 +462,12 @@ function leaveWorkspace() {
                     Rewrites, drafts, and summaries run inside this browser tab. Message text is end-to-end
                     encrypted and is never sent to the server for AI. Re-downloading picks the fastest model
                     this browser can run.
+                </p>
+
+                <p v-if="ai.isMobile" class="fine">
+                    Phones use the SmolLM2 tiers: Qwen2.5-1.5B is desktop only (12 GB+ RAM recommended)
+                    and stays hidden here, and Qwen2.5-0.5B is skipped because its 151k-token vocabulary
+                    slows mobile token generation.
                 </p>
 
                 <div class="ai-actions">
