@@ -303,8 +303,32 @@ function insertText(text) {
     editor.value?.chain().focus().insertContent(text).run();
 }
 
+function explainAiUnavailable(action = 'use on-device AI') {
+    toast.add({
+        severity: 'info',
+        summary: 'On-device AI',
+        detail: `Chrome Built-in AI is needed to ${action} on this device. Nothing is sent to the server.`,
+        life: 4200,
+    });
+}
+
 function toggleAi(event) {
-    if (!canRewrite.value || aiBusy.value || isEmpty.value) {
+    if (aiBusy.value) {
+        return;
+    }
+
+    if (!canRewrite.value) {
+        explainAiUnavailable('polish drafts');
+        return;
+    }
+
+    if (isEmpty.value) {
+        toast.add({
+            severity: 'info',
+            summary: 'AI Polish',
+            detail: 'Write a draft first, or use AI Write to generate one from notes.',
+            life: 3200,
+        });
         return;
     }
 
@@ -313,7 +337,12 @@ function toggleAi(event) {
 }
 
 async function toggleWrite(event) {
-    if (!canWrite.value || aiBusy.value) {
+    if (aiBusy.value) {
+        return;
+    }
+
+    if (!canWrite.value) {
+        explainAiUnavailable('write drafts');
         return;
     }
 
@@ -906,46 +935,42 @@ onBeforeUnmount(() => {
                     @click="run('toggleCode')"
                 />
                 <Button icon="pi pi-link" text rounded size="small" aria-label="Link" @click="toggleLink" />
-                <template v-if="canWrite || canRewrite">
-                    <span class="toolbar-divider" />
-                    <Button
-                        v-if="canWrite"
-                        icon="pi pi-pen-to-square"
-                        text
-                        rounded
-                        size="small"
-                        class="composer-ai-btn"
-                        :severity="aiBusy && aiMode === 'write' ? 'secondary' : undefined"
-                        :loading="aiBusy && aiMode === 'write'"
-                        :disabled="aiBusy"
-                        aria-label="AI Write"
-                        v-tooltip.top="'AI Write · on-device'"
-                        @click="toggleWrite"
-                    />
-                    <Button
-                        v-if="canRewrite"
-                        icon="pi pi-sparkles"
-                        text
-                        rounded
-                        size="small"
-                        class="composer-ai-btn"
-                        :severity="aiBusy && aiMode === 'polish' ? 'secondary' : undefined"
-                        :loading="aiBusy && aiMode === 'polish'"
-                        :disabled="isEmpty || aiBusy"
-                        aria-label="AI Polish"
-                        v-tooltip.top="'AI Polish · on-device'"
-                        @click="toggleAi"
-                    />
-                    <Button
-                        v-if="previousDraftBeforeAi && !aiBusy"
-                        label="Undo AI"
-                        text
-                        size="small"
-                        class="composer-ai-undo"
-                        aria-label="Undo AI"
-                        @click="undoAi"
-                    />
-                </template>
+                <span class="toolbar-divider" />
+                <Button
+                    icon="pi pi-pen-to-square"
+                    text
+                    rounded
+                    size="small"
+                    class="composer-ai-btn"
+                    :severity="aiBusy && aiMode === 'write' ? 'secondary' : undefined"
+                    :loading="aiBusy && aiMode === 'write'"
+                    :disabled="aiBusy"
+                    aria-label="AI Write"
+                    v-tooltip.top="canWrite ? 'AI Write · on-device' : 'AI Write · needs Chrome Built-in AI'"
+                    @click="toggleWrite"
+                />
+                <Button
+                    icon="pi pi-sparkles"
+                    text
+                    rounded
+                    size="small"
+                    class="composer-ai-btn"
+                    :severity="aiBusy && aiMode === 'polish' ? 'secondary' : undefined"
+                    :loading="aiBusy && aiMode === 'polish'"
+                    :disabled="aiBusy"
+                    aria-label="AI Polish"
+                    v-tooltip.top="canRewrite ? (isEmpty ? 'AI Polish · write a draft first' : 'AI Polish · on-device') : 'AI Polish · needs Chrome Built-in AI'"
+                    @click="toggleAi"
+                />
+                <Button
+                    v-if="previousDraftBeforeAi && !aiBusy"
+                    label="Undo AI"
+                    text
+                    size="small"
+                    class="composer-ai-undo"
+                    aria-label="Undo AI"
+                    @click="undoAi"
+                />
                 <span class="composer-hint">
                     <template v-if="aiStatusLabel">{{ aiStatusLabel }}</template>
                     <template v-else>{{ canAttach ? 'Drop files here · Shift + Enter for a new line' : 'Shift + Enter for a new line' }}</template>

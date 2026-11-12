@@ -106,8 +106,8 @@ const canManageMembers = computed(() => current.value?.type === 'private' || (cu
 const composerKey = computed(() => (editing.value ? `edit-${editing.value.id}` : `channel-${props.channel}`));
 const composerPlaceholder = computed(() => `Message ${current.value?.label || ''}`);
 const composerSubmit = computed(() => (editing.value ? 'Save changes' : 'Send'));
-const canSummarizeChannel = computed(() => canSummarize.value && messages.value.filter((item) => messagePlainForAi(item)).length >= 3);
-const canSummarizeThread = computed(() => canSummarize.value && replies.value.filter((item) => messagePlainForAi(item)).length >= 3);
+const channelHasSummaryMaterial = computed(() => messages.value.filter((item) => messagePlainForAi(item)).length >= 1);
+const threadHasSummaryMaterial = computed(() => replies.value.filter((item) => messagePlainForAi(item)).length >= 1);
 const threadAiMessages = computed(() => {
     if (!thread.value) {
         return [];
@@ -133,8 +133,17 @@ const showThreadSummarizeCta = computed(() => {
         return true;
     }
 
-    return canSummarizeThread.value;
+    return replies.value.length > 0;
 });
+
+function explainSummarizeUnavailable() {
+    toast.add({
+        severity: 'info',
+        summary: 'On-device AI',
+        detail: 'Chrome Built-in AI is needed to summarize on this device. Nothing is sent to the server.',
+        life: 4200,
+    });
+}
 
 watch(current, (channel) => {
     channelForm.topic = channel?.topic || '';
@@ -464,7 +473,22 @@ watch(threadFingerprint, (fingerprint, previous) => {
 });
 
 async function summarizeChannel() {
-    if (!canSummarizeChannel.value || channelSummaryBusy.value) {
+    if (channelSummaryBusy.value) {
+        return;
+    }
+
+    if (!canSummarize.value) {
+        explainSummarizeUnavailable();
+        return;
+    }
+
+    if (!channelHasSummaryMaterial.value) {
+        toast.add({
+            severity: 'info',
+            summary: 'Summarize',
+            detail: 'Load a few messages first, then try again.',
+            life: 2800,
+        });
         return;
     }
 
@@ -521,12 +545,27 @@ async function summarizeChannel() {
 }
 
 async function summarizeThread({ force = false } = {}) {
-    if (!canSummarizeThread.value || threadSummaryBusy.value || !thread.value) {
+    if (threadSummaryBusy.value || !thread.value) {
         return;
     }
 
     const fingerprint = threadFingerprint.value;
     if (!force && restoreThreadSummaryFromCache()) {
+        return;
+    }
+
+    if (!canSummarize.value) {
+        explainSummarizeUnavailable();
+        return;
+    }
+
+    if (!threadHasSummaryMaterial.value && !messagePlainForAi(thread.value)) {
+        toast.add({
+            severity: 'info',
+            summary: 'Summarize thread',
+            detail: 'This thread does not have enough readable text yet.',
+            life: 2800,
+        });
         return;
     }
 
@@ -1162,13 +1201,12 @@ onBeforeUnmount(() => {
 
             <div class="chat-tools">
                 <Button
-                    v-if="canSummarizeChannel"
                     icon="pi pi-sparkles"
                     text
                     rounded
                     :loading="channelSummaryBusy"
                     aria-label="Summarize recent"
-                    v-tooltip.bottom="'Summarize recent · on-device'"
+                    v-tooltip.bottom="canSummarize ? 'Summarize recent · on-device' : 'Summarize · needs Chrome Built-in AI'"
                     @click="summarizeChannel"
                 />
                 <Button icon="pi pi-search" text rounded aria-label="Search conversation" v-tooltip.bottom="'Search this conversation'" @click="openSearch" />
@@ -1433,7 +1471,6 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="thread-head-actions">
                         <Button
-                            v-if="canSummarizeThread"
                             icon="pi pi-sparkles"
                             text
                             rounded
@@ -1441,7 +1478,9 @@ onBeforeUnmount(() => {
                             :loading="threadSummaryBusy"
                             :severity="showThreadSummaryCard ? 'secondary' : undefined"
                             aria-label="Summarize thread"
-                            v-tooltip.bottom="showThreadSummaryCard ? 'Refresh thread summary · on-device' : 'Summarize thread · on-device'"
+                            v-tooltip.bottom="!canSummarize
+                                ? 'Summarize · needs Chrome Built-in AI'
+                                : (showThreadSummaryCard ? 'Refresh thread summary · on-device' : 'Summarize thread · on-device')"
                             @click="summarizeThread({ force: !!threadSummary })"
                         />
                         <Button icon="pi pi-times" text rounded aria-label="Close thread" @click="closeThread" />
