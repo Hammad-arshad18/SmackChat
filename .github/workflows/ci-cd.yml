@@ -58,6 +58,9 @@ jobs:
   frontend:
     name: Frontend build
     runs-on: ubuntu-latest
+    # Browser AI uses onnxruntime-web only; skip onnxruntime-node's CDN postinstall.
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
 
     steps:
       - name: Checkout
@@ -90,6 +93,9 @@ jobs:
       DEPLOY_PORT: ${{ secrets.SSH_PORT }}
       DEPLOY_PATH: ${{ secrets.SSH_DEPLOY_PATH }}
       SSH_OPTS: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=30
+      # Same as frontend job — deploy also runs npm ci before the Vite build.
+      ONNXRUNTIME_NODE_INSTALL: skip
+
 
     steps:
       - name: Checkout
