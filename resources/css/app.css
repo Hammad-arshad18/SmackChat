@@ -3298,6 +3298,13 @@ kbd {
     border-bottom: 1px solid var(--line);
 }
 
+.thread-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+}
+
 .thread-head h2 {
     font-size: 0.95rem;
     color: var(--ink);
@@ -3355,6 +3362,43 @@ kbd {
     font-size: 0.75rem;
     text-align: center;
     padding: 18px 8px;
+}
+
+.thread-replies-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.thread-replies-row .thread-replies-label {
+    flex: 1;
+    min-width: 0;
+}
+
+.thread-summarize-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--line));
+    background: color-mix(in srgb, var(--primary-soft) 65%, var(--surface));
+    color: var(--primary-strong);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.thread-summarize-cta:hover {
+    background: var(--primary-soft);
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+    color: var(--primary);
+}
+
+.thread-summarize-cta i {
+    font-size: 0.72rem;
 }
 
 .thread-replies-label {
@@ -3854,6 +3898,114 @@ kbd {
     white-space: nowrap;
 }
 
+.composer-ai-btn.p-button-secondary,
+.composer-toolbar .composer-ai-btn.p-button-secondary {
+    color: var(--primary);
+}
+
+.composer-ai-undo.p-button {
+    width: auto !important;
+    height: 27px;
+    padding: 0 8px !important;
+    font-size: 0.68rem;
+    font-weight: 650;
+    color: var(--muted-strong);
+}
+
+.composer-input.is-ai-streaming .ProseMirror {
+    color: color-mix(in srgb, var(--text) 78%, var(--primary));
+}
+
+.ai-summary-card {
+    margin: 0 0 14px;
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--line));
+    border-radius: var(--radius-md);
+    background:
+        linear-gradient(160deg, color-mix(in srgb, var(--primary-soft) 70%, transparent), transparent 58%),
+        var(--surface);
+    box-shadow: var(--shadow-sm);
+    flex: none;
+}
+
+.ai-summary-card.collapsed {
+    padding-bottom: 10px;
+}
+
+.ai-summary-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.ai-summary-head strong {
+    display: block;
+    color: var(--ink);
+    font-size: 0.86rem;
+    letter-spacing: -0.02em;
+}
+
+.ai-summary-meta {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 500;
+}
+
+.ai-summary-actions {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex: none;
+}
+
+.ai-summary-progress {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.ai-summary-body {
+    margin-top: 8px;
+    color: var(--text);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.ai-summary-body p {
+    margin: 0 0 0.45em;
+}
+
+.ai-summary-body p:last-child {
+    margin-bottom: 0;
+}
+
+.ai-summary-body ul {
+    margin: 0;
+    padding-left: 1.15em;
+}
+
+.ai-summary-body li {
+    margin: 0.2em 0;
+}
+
+.ai-summary-body li::marker {
+    color: var(--primary);
+}
+
+.thread-ai-summary {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin-bottom: 4px;
+}
+
+.app-dark .thread-summarize-cta {
+    color: var(--primary);
+}
+
 .composer-input .ProseMirror {
     min-height: 24px;
     max-height: 180px;
@@ -4181,6 +4333,53 @@ kbd {
     display: flex;
     justify-content: flex-end;
     gap: 6px;
+}
+
+.composer-write-form {
+    width: min(92vw, 22rem);
+    display: grid;
+    gap: 8px;
+    padding: 3px;
+}
+
+.composer-write-copy {
+    margin: -2px 0 2px;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+.composer-write-tones {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.composer-write-tone {
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--muted-strong);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 0.68rem;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+.composer-write-tone:hover {
+    border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
+    color: var(--primary);
+}
+
+.composer-write-tone.active {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+    background: var(--primary-soft);
+    color: var(--primary-strong);
+}
+
+.composer-write-tone:disabled {
+    opacity: 0.55;
+    cursor: default;
 }
 
 /* --------------------------------------------------------------------------
