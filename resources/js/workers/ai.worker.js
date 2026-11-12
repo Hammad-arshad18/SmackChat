@@ -138,31 +138,16 @@ async function buildPipeline() {
     }
 
     const active = activeSpec();
-    const requested = active.device;
-    const runtime = requested === 'webgpu'
-        ? 'webgpu'
-        : requested.startsWith('webnn')
-            ? 'webnn'
-            : 'wasm';
-
     loadingLabel = active.modelLabel;
     fileProgress.clear();
 
     const options = {
-        // Explicit device: Transformers.js would otherwise default to 'wasm'.
-        device: runtime,
-        dtype: runtime === 'webgpu' ? await webgpuDtype() : 'q4',
+        dtype: active.device === 'webgpu' ? await webgpuDtype() : 'q4',
+        device: active.device,
         progress_callback: reportProgress,
     };
 
-    if (runtime === 'webnn') {
-        options.session_options = {
-            executionProviders: [
-                { name: 'webnn', deviceType: requested === 'webnn-npu' ? 'npu' : 'gpu' },
-                'wasm',
-            ],
-        };
-    } else if (runtime === 'wasm') {
+    if (active.device !== 'webgpu') {
         // WASM sessions are the memory-constrained path: skip ORT's pre-allocated arena
         // and per-shape memory pattern so the model fits on low-memory machines.
         options.session_options = {
@@ -171,12 +156,10 @@ async function buildPipeline() {
         };
     }
 
-    console.info(`[SmackChat AI] ${active.modelLabel} → ${requested} (runtime: ${runtime})`);
-
     post({
         type: 'download-progress',
         percent: 0,
-        statusText: `Loading ${active.modelLabel} on ${runtime}…`,
+        statusText: `Loading ${active.modelLabel} on this device…`,
     });
 
     activePipeline = await transformers.pipeline('text-generation', active.modelId, options);
@@ -184,7 +167,7 @@ async function buildPipeline() {
     post({ type: 'download-complete' });
     scheduleIdleDispose();
 
-    if (runtime === 'webgpu') {
+    if (active.device === 'webgpu') {
         // Fire and forget: generation calls queue behind it, but the badge turns ready now.
         warmUp(activePipeline);
     }
@@ -296,11 +279,10 @@ self.addEventListener('message', async (event) => {
 
     if (data.type === 'init') {
         device = { isIos: !!data.isIos };
-        const requested = String(data.device || 'wasm');
         spec = {
             modelId: String(data.modelId || FALLBACK_MODEL.id),
             modelLabel: String(data.modelLabel || FALLBACK_MODEL.label),
-            device: ['webgpu', 'webnn-npu', 'webnn-gpu'].includes(requested) ? requested : 'wasm',
+            device: data.device === 'webgpu' ? 'webgpu' : 'wasm',
         };
         return;
     }

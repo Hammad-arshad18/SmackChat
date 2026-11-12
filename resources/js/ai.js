@@ -71,9 +71,6 @@ export const ai = reactive({
     isMobile: false,
     isIos: false,
     hasLocalCache: false,
-    canWebgpu: false,
-    canWebnn: false,
-    backend: '',
 });
 
 function storageGet(key) {
@@ -207,46 +204,6 @@ function isSafariBrowser() {
     return /safari/i.test(ua) && !/chrome|chromium|crios|fxios|edg|firefox|android/i.test(ua);
 }
 
-/**
- * Ask the browser for a real accelerator instead of trusting `navigator.gpu` /
- * `navigator.ml` existence: both objects can be present while no adapter or NPU
- * context is actually available (blocked GPU, VM, old driver).
- */
-async function detectCompute() {
-    ai.canWebgpu = false;
-    ai.canWebnn = false;
-
-    if (typeof navigator !== 'undefined' && navigator.gpu?.requestAdapter) {
-        try {
-            let adapter = null;
-
-            try {
-                adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-            } catch {
-                adapter = null;
-            }
-
-            adapter ||= await navigator.gpu.requestAdapter();
-            ai.canWebgpu = !!adapter;
-        } catch {
-            ai.canWebgpu = false;
-        }
-    }
-
-    if (typeof navigator !== 'undefined' && navigator.ml?.createContext) {
-        for (const options of [{ deviceType: 'npu' }, undefined]) {
-            try {
-                const context = await navigator.ml.createContext(options);
-                context?.destroy?.();
-                ai.canWebnn = !!context;
-                break;
-            } catch {
-                ai.canWebnn = false;
-            }
-        }
-    }
-}
-
 function hintFor(step) {
     const where = ai.isIos ? 'iOS' : ai.isMobile ? 'Android' : 'Desktop';
 
@@ -264,31 +221,17 @@ function isPrimaryModel(model) {
 }
 
 /**
- * Model attempts for this browser, fastest viable backend first.
+ * Model attempts for this browser, fastest viable first.
  *
- * - GPU (WebGPU/q4f16) when a real adapter exists;
- * - NPU or GPU through WebNN when the browser exposes `navigator.ml`;
- * - CPU (WASM) only as the last resort, with small models because a CPU session
- *   at 0.5B is several times slower than SmolLM2-360M.
- *
- * The same model id is reused across device attempts, so a failed GPU/NPU session
- * does not download the weights twice.
+ * A CPU-only WASM session at 0.5B is several times slower than SmolLM2-360M, so
+ * browsers without WebGPU (Firefox, Safari, older Chrome) go straight to the small
+ * models. WebGPU browsers get q4f16 weights, which roughly halve generation time.
  */
 function localLadder() {
+    const gpu = typeof navigator !== 'undefined' && !!navigator.gpu;
     const lite = storageGet(LOCAL_TIER_KEY) === 'lite';
-    const gpu = ai.canWebgpu;
-    const npu = ai.canWebnn;
 
-    if (ai.isIos) {
-        return [
-            { model: LOCAL_MODELS.tiny, device: 'wasm' },
-            { model: LOCAL_MODELS.micro, device: 'wasm' },
-        ];
-    }
-
-    // Safari's WebGPU worker support is still unreliable, and a failed attempt there
-    // costs a full download before it can fail.
-    if (isSafariBrowser()) {
+    if (ai.isIos || !gpu || isSafariBrowser()) {
         return [
             { model: LOCAL_MODELS.tiny, device: 'wasm' },
             { model: LOCAL_MODELS.micro, device: 'wasm' },
@@ -297,18 +240,15 @@ function localLadder() {
 
     if (ai.isMobile) {
         return [
-            ...(gpu ? [{ model: LOCAL_MODELS.small, device: 'webgpu' }] : []),
-            ...(npu ? [{ model: LOCAL_MODELS.small, device: 'webnn-npu' }] : []),
-            { model: LOCAL_MODELS.small, device: 'wasm' },
+            { model: LOCAL_MODELS.small, device: 'webgpu' },
             { model: LOCAL_MODELS.tiny, device: 'wasm' },
             { model: LOCAL_MODELS.micro, device: 'wasm' },
         ];
     }
 
     return [
-        ...(!lite && gpu ? [{ model: LOCAL_MODELS.large, device: 'webgpu' }] : []),
-        ...(gpu ? [{ model: LOCAL_MODELS.small, device: 'webgpu' }] : []),
-        ...(npu ? [{ model: LOCAL_MODELS.small, device: 'webnn-npu' }] : []),
+        ...(lite ? [] : [{ model: LOCAL_MODELS.large, device: 'webgpu' }]),
+        { model: LOCAL_MODELS.small, device: 'webgpu' },
         { model: LOCAL_MODELS.small, device: 'wasm' },
         { model: LOCAL_MODELS.tiny, device: 'wasm' },
         { model: LOCAL_MODELS.micro, device: 'wasm' },
@@ -402,7 +342,6 @@ async function useLocalFallback() {
     ai.hasLocalCache = cached;
     ai.modelState = cached && flagged && enabled ? 'ready' : 'not-downloaded';
     ai.downloadPercent = ai.modelState === 'ready' ? 100 : 0;
-    ai.backend = ai.modelState === 'ready' ? selectedStep()?.device || '' : '';
 }
 
 let detection = null;
@@ -431,12 +370,10 @@ async function detectCapabilities() {
         ai.modelSizeHint = GEMINI_HINT;
         ai.downloadPercent = nano.ready ? 100 : 0;
         ai.downloadLabel = '';
-        ai.backend = 'gemini-nano';
 
         return ai;
     }
 
-    await detectCompute();
     await useLocalFallback();
 
     return ai;
@@ -464,35 +401,6 @@ export function aiReadyBadge() {
     }
 
     return ai.engine === 'transformers-local' ? '🔒 Offline AI Ready' : '';
-}
-
-function deviceLabel(device) {
-    switch (device) {
-        case 'webgpu':
-            return 'GPU · WebGPU';
-        case 'webnn-npu':
-            return 'NPU · WebNN';
-        case 'webnn-gpu':
-            return 'GPU · WebNN';
-        case 'wasm':
-            return 'CPU · WASM';
-        default:
-            return 'Not selected yet';
-    }
-}
-
-/**
- * Human label for the compute backend that will run (or is running) inference.
- * Makes it obvious when the browser fell back to the CPU.
- */
-export function aiComputeLabel() {
-    if (ai.engine === 'gemini-nano') {
-        return 'Built-in AI (Gemini Nano)';
-    }
-
-    const step = ai.modelState === 'ready' ? selectedStep() : localLadder()[0];
-
-    return deviceLabel(ai.backend || step?.device || '');
 }
 
 /* ------------------------------------------------------------------ */
@@ -596,7 +504,6 @@ function markLocalReady(step) {
     ai.downloadPercent = 100;
     ai.downloadLabel = '';
     ai.hasLocalCache = true;
-    ai.backend = step.device;
 }
 
 async function failoverToLocal() {
@@ -748,7 +655,6 @@ export async function removeDownloadedLocalModel() {
     ai.downloadPercent = 0;
     ai.downloadLabel = '';
     ai.hasLocalCache = false;
-    ai.backend = '';
 
     if (ai.engine === 'transformers-local') {
         ai.modelState = 'not-downloaded';

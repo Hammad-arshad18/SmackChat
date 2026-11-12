@@ -5,7 +5,6 @@ import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
 import {
     ai,
-    aiComputeLabel,
     aiEngineLabel,
     initAiCapabilities,
     prepareModel,
@@ -62,7 +61,6 @@ const statusPresets = [
 const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 const roleLabel = computed(() => (office.workspace?.role || 'member').replace(/^\w/, (letter) => letter.toUpperCase()));
 const aiEngineName = computed(() => aiEngineLabel());
-const aiCompute = computed(() => aiComputeLabel());
 const aiStatusLabel = computed(() => {
     if (ai.engine === 'unavailable') {
         return 'Not supported here';
@@ -440,15 +438,10 @@ function leaveWorkspace() {
 
                 <div class="detail-rows">
                     <div><span>Engine</span><strong>{{ aiEngineName }}</strong></div>
-                    <div><span>Compute</span><strong>{{ aiCompute }}</strong></div>
                     <div><span>Status</span><strong>{{ aiStatusLabel }}</strong></div>
                     <div v-if="ai.engine === 'transformers-local'"><span>Model size</span><strong>{{ ai.modelSizeHint }}</strong></div>
                     <div><span>Data leaving your device</span><strong>None</strong></div>
                 </div>
-
-                <p v-if="ai.engine === 'transformers-local' && ai.backend === 'wasm'" class="fine">
-                    This browser is not offering a GPU or NPU to web apps, so inference runs on the CPU.
-                </p>
 
                 <div v-if="ai.modelState === 'downloading'" class="ai-download-row">
                     <div class="ai-download-copy">
