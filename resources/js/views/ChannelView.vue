@@ -3,6 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
+import {
+    clearCachedThreadSummary,
+    getAiCapabilities,
+    readCachedThreadSummary,
+    summarizeMessagesLocally,
+    threadSummaryFingerprint,
+    writeCachedThreadSummary,
+} from '@/ai';
 import api, { errorText } from '@/api';
 import { plainText, revealMessage, sealDocument, searchMessages } from '@/e2e';
 import Composer from '@/components/Composer.vue';
@@ -51,6 +59,18 @@ const reactionPop = ref(null);
 const channelForm = reactive({ topic: '', description: '' });
 const arriving = ref(new Set());
 const emojis = ['👍', '❤️', '😄', '🎉', '✅', '👀', '🚀', '🔥'];
+const canSummarize = ref(false);
+const channelSummary = ref('');
+const channelSummaryOpen = ref(true);
+const channelSummaryBusy = ref(false);
+const channelSummaryProgress = ref(null);
+const threadSummary = ref('');
+const threadSummaryOpen = ref(true);
+const threadSummaryBusy = ref(false);
+const threadSummaryProgress = ref(null);
+const threadSummaryHidden = ref(false);
+const threadSummaryFromCache = ref(false);
+const threadSummaryCachedAt = ref(null);
 let poll;
 let polling = true;
 let stopTyping = () => {};
@@ -58,6 +78,8 @@ let typingTimer;
 let searchTimer;
 let searchToken = 0;
 let focusTimer;
+let channelSummaryRun = 0;
+let threadSummaryRun = 0;
 const arriveTimers = new Map();
 
 const current = computed(() => office.channels.find((item) => item.slug === props.channel));
@@ -84,6 +106,44 @@ const canManageMembers = computed(() => current.value?.type === 'private' || (cu
 const composerKey = computed(() => (editing.value ? `edit-${editing.value.id}` : `channel-${props.channel}`));
 const composerPlaceholder = computed(() => `Message ${current.value?.label || ''}`);
 const composerSubmit = computed(() => (editing.value ? 'Save changes' : 'Send'));
+const channelHasSummaryMaterial = computed(() => messages.value.filter((item) => messagePlainForAi(item)).length >= 1);
+const threadHasSummaryMaterial = computed(() => replies.value.filter((item) => messagePlainForAi(item)).length >= 1);
+const threadAiMessages = computed(() => {
+    if (!thread.value) {
+        return [];
+    }
+
+    return [thread.value, ...replies.value]
+        .filter((item) => messagePlainForAi(item))
+        .map((item) => ({
+            ...item,
+            text: messagePlainForAi(item),
+        }));
+});
+const threadFingerprint = computed(() => threadSummaryFingerprint(threadAiMessages.value));
+const showThreadSummaryCard = computed(() => (
+    !threadSummaryHidden.value && (threadSummaryBusy.value || !!threadSummary.value)
+));
+const showThreadSummarizeCta = computed(() => {
+    if (threadSummaryBusy.value || showThreadSummaryCard.value) {
+        return false;
+    }
+
+    if (threadSummaryHidden.value && threadSummary.value) {
+        return true;
+    }
+
+    return replies.value.length > 0;
+});
+
+function explainSummarizeUnavailable() {
+    toast.add({
+        severity: 'info',
+        summary: 'On-device AI',
+        detail: 'Chrome Built-in AI is needed to summarize on this device. Nothing is sent to the server.',
+        life: 4200,
+    });
+}
 
 watch(current, (channel) => {
     channelForm.topic = channel?.topic || '';
@@ -96,6 +156,8 @@ watch(() => props.channel, async () => {
     detailsOpen.value = false;
     searchOpen.value = false;
     typing.value = '';
+    dismissChannelSummary();
+    resetThreadSummaryUi();
     await load();
 });
 
@@ -252,7 +314,314 @@ async function restoreThread(token) {
 function closeThread() {
     thread.value = null;
     replies.value = [];
+    resetThreadSummaryUi();
     syncThreadQuery(null);
+}
+
+function messagePlainForAi(message) {
+    if (!message || message.deleted) {
+        return '';
+    }
+
+    if (message.text?.trim()) {
+        return message.text.trim();
+    }
+
+    if (message.document) {
+        return plainText(message.document).trim();
+    }
+
+    return '';
+}
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function formatAiMarkdown(value) {
+    const escaped = escapeHtml(value).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    const lines = escaped.split('\n');
+    const html = [];
+    let inList = false;
+
+    for (const line of lines) {
+        const bullet = line.match(/^\s*[-*•]\s+(.+)$/);
+        if (bullet) {
+            if (!inList) {
+                html.push('<ul>');
+                inList = true;
+            }
+            html.push(`<li>${bullet[1]}</li>`);
+            continue;
+        }
+
+        if (inList) {
+            html.push('</ul>');
+            inList = false;
+        }
+
+        if (!line.trim()) {
+            continue;
+        }
+
+        html.push(`<p>${line}</p>`);
+    }
+
+    if (inList) {
+        html.push('</ul>');
+    }
+
+    return html.join('') || '<p></p>';
+}
+
+function dismissChannelSummary() {
+    channelSummaryRun += 1;
+    channelSummary.value = '';
+    channelSummaryBusy.value = false;
+    channelSummaryProgress.value = null;
+    channelSummaryOpen.value = true;
+}
+
+function resetThreadSummaryUi() {
+    threadSummaryRun += 1;
+    threadSummary.value = '';
+    threadSummaryBusy.value = false;
+    threadSummaryProgress.value = null;
+    threadSummaryOpen.value = true;
+    threadSummaryHidden.value = false;
+    threadSummaryFromCache.value = false;
+    threadSummaryCachedAt.value = null;
+}
+
+function dismissThreadSummary() {
+    threadSummaryRun += 1;
+    threadSummaryBusy.value = false;
+    threadSummaryProgress.value = null;
+    threadSummaryHidden.value = true;
+}
+
+function applyCachedThreadSummary(entry) {
+    if (!entry?.text) {
+        return false;
+    }
+
+    threadSummary.value = entry.text;
+    threadSummaryOpen.value = true;
+    threadSummaryHidden.value = false;
+    threadSummaryFromCache.value = true;
+    threadSummaryCachedAt.value = entry.savedAt || null;
+    threadSummaryBusy.value = false;
+    threadSummaryProgress.value = null;
+
+    return true;
+}
+
+function restoreThreadSummaryFromCache() {
+    if (!thread.value?.ref || !office.slug) {
+        return false;
+    }
+
+    const fingerprint = threadFingerprint.value;
+    if (!fingerprint) {
+        return false;
+    }
+
+    const cached = readCachedThreadSummary(office.slug, thread.value.ref);
+    if (!cached || cached.fingerprint !== fingerprint) {
+        if (cached && cached.fingerprint !== fingerprint) {
+            clearCachedThreadSummary(office.slug, thread.value.ref);
+        }
+
+        if (threadSummary.value && threadSummaryFromCache.value) {
+            threadSummary.value = '';
+            threadSummaryFromCache.value = false;
+            threadSummaryCachedAt.value = null;
+        }
+
+        return false;
+    }
+
+    return applyCachedThreadSummary(cached);
+}
+
+watch(threadFingerprint, (fingerprint, previous) => {
+    if (!thread.value?.ref) {
+        return;
+    }
+
+    if (!fingerprint) {
+        resetThreadSummaryUi();
+        return;
+    }
+
+    if (restoreThreadSummaryFromCache()) {
+        return;
+    }
+
+    if (previous && fingerprint !== previous && threadSummary.value) {
+        // New or edited reply — drop the stale summary so we don't show outdated TL;DR
+        threadSummary.value = '';
+        threadSummaryFromCache.value = false;
+        threadSummaryCachedAt.value = null;
+        threadSummaryHidden.value = false;
+        clearCachedThreadSummary(office.slug, thread.value.ref);
+    }
+});
+
+async function summarizeChannel() {
+    if (channelSummaryBusy.value) {
+        return;
+    }
+
+    if (!canSummarize.value) {
+        explainSummarizeUnavailable();
+        return;
+    }
+
+    if (!channelHasSummaryMaterial.value) {
+        toast.add({
+            severity: 'info',
+            summary: 'Summarize',
+            detail: 'Load a few messages first, then try again.',
+            life: 2800,
+        });
+        return;
+    }
+
+    const token = ++channelSummaryRun;
+    channelSummaryBusy.value = true;
+    channelSummaryProgress.value = null;
+    channelSummaryOpen.value = true;
+    channelSummary.value = '';
+
+    try {
+        const payload = messages.value
+            .filter((item) => messagePlainForAi(item))
+            .map((item) => ({
+                ...item,
+                text: messagePlainForAi(item),
+            }));
+
+        const result = await summarizeMessagesLocally(
+            payload,
+            { type: 'key-points', length: 'short' },
+            {
+                onChunk: (chunk) => {
+                    if (token === channelSummaryRun) {
+                        channelSummary.value = chunk;
+                    }
+                },
+                onDownloadProgress: (percent) => {
+                    if (token === channelSummaryRun) {
+                        channelSummaryProgress.value = percent;
+                    }
+                },
+            },
+        );
+
+        if (token === channelSummaryRun) {
+            channelSummary.value = result;
+        }
+    } catch (error) {
+        if (token === channelSummaryRun) {
+            channelSummary.value = '';
+            toast.add({
+                severity: 'warn',
+                summary: 'On-device AI',
+                detail: errorText(error, 'Could not summarize this conversation locally.'),
+                life: 3500,
+            });
+        }
+    } finally {
+        if (token === channelSummaryRun) {
+            channelSummaryBusy.value = false;
+            channelSummaryProgress.value = null;
+        }
+    }
+}
+
+async function summarizeThread({ force = false } = {}) {
+    if (threadSummaryBusy.value || !thread.value) {
+        return;
+    }
+
+    const fingerprint = threadFingerprint.value;
+    if (!force && restoreThreadSummaryFromCache()) {
+        return;
+    }
+
+    if (!canSummarize.value) {
+        explainSummarizeUnavailable();
+        return;
+    }
+
+    if (!threadHasSummaryMaterial.value && !messagePlainForAi(thread.value)) {
+        toast.add({
+            severity: 'info',
+            summary: 'Summarize thread',
+            detail: 'This thread does not have enough readable text yet.',
+            life: 2800,
+        });
+        return;
+    }
+
+    const token = ++threadSummaryRun;
+    threadSummaryBusy.value = true;
+    threadSummaryProgress.value = null;
+    threadSummaryOpen.value = true;
+    threadSummaryHidden.value = false;
+    threadSummaryFromCache.value = false;
+    threadSummaryCachedAt.value = null;
+    threadSummary.value = '';
+
+    try {
+        const result = await summarizeMessagesLocally(
+            threadAiMessages.value,
+            { type: 'key-points', length: 'short' },
+            {
+                onChunk: (chunk) => {
+                    if (token === threadSummaryRun) {
+                        threadSummary.value = chunk;
+                    }
+                },
+                onDownloadProgress: (percent) => {
+                    if (token === threadSummaryRun) {
+                        threadSummaryProgress.value = percent;
+                    }
+                },
+            },
+        );
+
+        if (token !== threadSummaryRun) {
+            return;
+        }
+
+        threadSummary.value = result;
+        if (result && fingerprint === threadFingerprint.value) {
+            writeCachedThreadSummary(office.slug, thread.value.ref, result, fingerprint);
+            threadSummaryFromCache.value = false;
+            threadSummaryCachedAt.value = Date.now();
+        }
+    } catch (error) {
+        if (token === threadSummaryRun) {
+            threadSummary.value = '';
+            toast.add({
+                severity: 'warn',
+                summary: 'On-device AI',
+                detail: errorText(error, 'Could not summarize this thread locally.'),
+                life: 3500,
+            });
+        }
+    } finally {
+        if (token === threadSummaryRun) {
+            threadSummaryBusy.value = false;
+            threadSummaryProgress.value = null;
+        }
+    }
 }
 
 async function focusFromQuery() {
@@ -501,6 +870,9 @@ async function openThread(message, { focus = true, history = 'push' } = {}) {
 
     editing.value = null;
     const already = thread.value?.id === message.id && replies.value.length;
+    if (thread.value?.id !== message.id) {
+        resetThreadSummaryUi();
+    }
     thread.value = message;
     syncThreadQuery(message.ref, history);
     if (!already) {
@@ -511,6 +883,7 @@ async function openThread(message, { focus = true, history = 'push' } = {}) {
         const { data } = await endpoint({ parent_id: message.id });
         replies.value = await hydrate(data.messages);
         await nextTick();
+        restoreThreadSummaryFromCache();
         if (threadScroller.value) threadScroller.value.scrollTop = threadScroller.value.scrollHeight;
         document.getElementById(`msg-${message.id}`)?.scrollIntoView({ block: 'center' });
         if (focus) threadComposerRef.value?.focus();
@@ -777,6 +1150,13 @@ function schedulePoll() {
 }
 
 onMounted(async () => {
+    try {
+        const capabilities = await getAiCapabilities();
+        canSummarize.value = capabilities.canSummarize;
+    } catch {
+        canSummarize.value = false;
+    }
+
     await load();
     window.addEventListener('smack-message', onLive);
     whenRealtime().finally(schedulePoll);
@@ -820,6 +1200,15 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="chat-tools">
+                <Button
+                    icon="pi pi-sparkles"
+                    text
+                    rounded
+                    :loading="channelSummaryBusy"
+                    aria-label="Summarize recent"
+                    v-tooltip.bottom="canSummarize ? 'Summarize recent · on-device' : 'Summarize · needs Chrome Built-in AI'"
+                    @click="summarizeChannel"
+                />
                 <Button icon="pi pi-search" text rounded aria-label="Search conversation" v-tooltip.bottom="'Search this conversation'" @click="openSearch" />
                 <Button icon="pi pi-info-circle" text rounded aria-label="Conversation details" v-tooltip.bottom="'Details'" @click="detailsOpen = true" />
                 <Tag
@@ -846,6 +1235,49 @@ onBeforeUnmount(() => {
                         class="older-button"
                         @click="older"
                     />
+
+                    <section
+                        v-if="channelSummaryBusy || channelSummary"
+                        class="ai-summary-card"
+                        :class="{ collapsed: !channelSummaryOpen && channelSummary }"
+                    >
+                        <header class="ai-summary-head">
+                            <div>
+                                <p class="card-kicker">On-device AI · Private</p>
+                                <strong>Recent catch-up</strong>
+                            </div>
+                            <div class="ai-summary-actions">
+                                <Button
+                                    v-if="channelSummary"
+                                    :icon="channelSummaryOpen ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+                                    text
+                                    rounded
+                                    size="small"
+                                    aria-label="Toggle summary"
+                                    @click="channelSummaryOpen = !channelSummaryOpen"
+                                />
+                                <Button
+                                    icon="pi pi-times"
+                                    text
+                                    rounded
+                                    size="small"
+                                    aria-label="Dismiss summary"
+                                    @click="dismissChannelSummary"
+                                />
+                            </div>
+                        </header>
+                        <p v-if="channelSummaryProgress != null" class="ai-summary-progress">
+                            Downloading local AI: {{ channelSummaryProgress }}%
+                        </p>
+                        <p v-else-if="channelSummaryBusy && !channelSummary" class="ai-summary-progress">
+                            Summarizing on this device…
+                        </p>
+                        <div
+                            v-if="channelSummary && channelSummaryOpen"
+                            class="ai-summary-body"
+                            v-html="formatAiMarkdown(channelSummary)"
+                        />
+                    </section>
 
                     <div v-if="loading" class="message-skeletons">
                         <Skeleton v-for="index in 5" :key="index" :height="index === 1 ? '4.2rem' : '3.2rem'" border-radius="16px" />
@@ -1037,10 +1469,82 @@ onBeforeUnmount(() => {
                         <p class="card-kicker">Thread</p>
                         <h2>{{ current?.label || 'Conversation' }}</h2>
                     </div>
-                    <Button icon="pi pi-times" text rounded aria-label="Close thread" @click="closeThread" />
+                    <div class="thread-head-actions">
+                        <Button
+                            icon="pi pi-sparkles"
+                            text
+                            rounded
+                            size="small"
+                            :loading="threadSummaryBusy"
+                            :severity="showThreadSummaryCard ? 'secondary' : undefined"
+                            aria-label="Summarize thread"
+                            v-tooltip.bottom="!canSummarize
+                                ? 'Summarize · needs Chrome Built-in AI'
+                                : (showThreadSummaryCard ? 'Refresh thread summary · on-device' : 'Summarize thread · on-device')"
+                            @click="summarizeThread({ force: !!threadSummary })"
+                        />
+                        <Button icon="pi pi-times" text rounded aria-label="Close thread" @click="closeThread" />
+                    </div>
                 </header>
 
                 <div ref="threadScroller" class="thread-scroll">
+                    <section
+                        v-if="showThreadSummaryCard"
+                        class="ai-summary-card thread-ai-summary"
+                        :class="{ collapsed: !threadSummaryOpen && threadSummary }"
+                    >
+                        <header class="ai-summary-head">
+                            <div>
+                                <p class="card-kicker">On-device AI · Private</p>
+                                <strong>Thread TL;DR</strong>
+                                <small v-if="threadSummary && !threadSummaryBusy" class="ai-summary-meta">
+                                    {{ threadSummaryFromCache ? 'Saved on this device' : 'Just generated' }}
+                                    · stays until a new reply
+                                </small>
+                            </div>
+                            <div class="ai-summary-actions">
+                                <Button
+                                    v-if="threadSummary && !threadSummaryBusy"
+                                    icon="pi pi-refresh"
+                                    text
+                                    rounded
+                                    size="small"
+                                    aria-label="Refresh thread summary"
+                                    v-tooltip.top="'Regenerate'"
+                                    @click="summarizeThread({ force: true })"
+                                />
+                                <Button
+                                    v-if="threadSummary"
+                                    :icon="threadSummaryOpen ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+                                    text
+                                    rounded
+                                    size="small"
+                                    aria-label="Toggle thread summary"
+                                    @click="threadSummaryOpen = !threadSummaryOpen"
+                                />
+                                <Button
+                                    icon="pi pi-times"
+                                    text
+                                    rounded
+                                    size="small"
+                                    aria-label="Hide thread summary"
+                                    @click="dismissThreadSummary"
+                                />
+                            </div>
+                        </header>
+                        <p v-if="threadSummaryProgress != null" class="ai-summary-progress">
+                            Downloading local AI: {{ threadSummaryProgress }}%
+                        </p>
+                        <p v-else-if="threadSummaryBusy && !threadSummary" class="ai-summary-progress">
+                            Summarizing on this device…
+                        </p>
+                        <div
+                            v-if="threadSummary && threadSummaryOpen"
+                            class="ai-summary-body"
+                            v-html="formatAiMarkdown(threadSummary)"
+                        />
+                    </section>
+
                     <article class="thread-parent">
                         <div class="thread-parent-head">
                             <PersonAvatar :person="thread.user" color="#928875" />
@@ -1070,7 +1574,20 @@ onBeforeUnmount(() => {
                     </article>
 
                     <p v-if="!replies.length" class="thread-empty">No replies yet.</p>
-                    <div v-else class="thread-replies-label">{{ replies.length }} {{ replies.length === 1 ? 'reply' : 'replies' }}</div>
+                    <div v-else class="thread-replies-row">
+                        <div class="thread-replies-label">
+                            <span>{{ replies.length }} {{ replies.length === 1 ? 'reply' : 'replies' }}</span>
+                        </div>
+                        <button
+                            v-if="showThreadSummarizeCta"
+                            type="button"
+                            class="thread-summarize-cta"
+                            @click="summarizeThread()"
+                        >
+                            <i :class="threadSummaryHidden && threadSummary ? 'pi pi-eye' : 'pi pi-sparkles'" />
+                            {{ threadSummaryHidden && threadSummary ? 'Show summary' : 'Summarize thread' }}
+                        </button>
+                    </div>
 
                     <article
                         v-for="reply in replies"
