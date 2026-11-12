@@ -4002,6 +4002,21 @@ kbd {
     margin-bottom: 4px;
 }
 
+/* Channel catch-up summary: stays pinned below the channel header so the user does
+   not have to scroll back to the top of the transcript to read it. The negative
+   offset cancels the transcript's top padding so the card pins flush. */
+.channel-ai-summary {
+    position: sticky;
+    top: -16px;
+    z-index: 3;
+}
+
+@media (max-width: 700px) {
+    .channel-ai-summary {
+        top: -12px;
+    }
+}
+
 .app-dark .thread-summarize-cta {
     color: var(--primary);
 }

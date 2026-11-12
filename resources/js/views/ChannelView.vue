@@ -1297,7 +1297,7 @@ onBeforeUnmount(() => {
 
                     <section
                         v-if="channelSummaryBusy || channelSummary"
-                        class="ai-summary-card"
+                        class="ai-summary-card channel-ai-summary"
                         :class="{ collapsed: !channelSummaryOpen && channelSummary }"
                     >
                         <header class="ai-summary-head">
