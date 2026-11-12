@@ -4382,6 +4382,172 @@ kbd {
     cursor: default;
 }
 
+/* On-device AI: writer popover, one-time download, ready badge */
+
+/* The write-with-AI panel is a popover anchored to the toolbar button. On phones it
+   becomes a near-full-width sheet that scrolls instead of overflowing the viewport. */
+.composer-write-pop {
+    max-width: calc(100vw - 16px);
+}
+
+.composer-write-pop .composer-write-form .form-label {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+}
+
+.composer-write-pop .composer-write-input {
+    font-size: 0.9rem;
+    line-height: 1.45;
+}
+
+.ai-download-row {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    border: 1px dashed color-mix(in srgb, var(--primary) 30%, var(--line));
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+}
+
+.ai-download-copy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted-strong);
+    font-size: 0.7rem;
+    line-height: 1.35;
+}
+
+.ai-download-copy i {
+    color: var(--primary);
+}
+
+.ai-download-bar {
+    height: 6px !important;
+}
+
+.ai-ready-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--primary-soft);
+    color: var(--primary-strong);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+
+.composer-toolbar .ai-ready-badge {
+    margin-left: auto;
+}
+
+.chat-ai-badge {
+    margin-right: 4px;
+}
+
+@media (max-width: 720px) {
+    .chat-ai-badge {
+        display: none;
+    }
+}
+
+.composer-toolbar .ai-ready-badge + .composer-hint {
+    margin-left: 8px;
+}
+
+.ai-download-dialog {
+    display: grid;
+    gap: 12px;
+}
+
+.ai-download-dialog p {
+    color: var(--muted-strong);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.ai-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+
+.composer-ai-menu .p-menu-item.composer-ai-badge .p-menu-item-link,
+.composer-ai-menu .p-menu-item.composer-ai-badge .p-menu-item-label {
+    color: var(--primary-strong);
+    font-weight: 750;
+    opacity: 1;
+}
+
+/* Write-with-AI popover on phones: a near-full-width, scrollable sheet with
+   16px text (stops iOS zoom-on-focus) and finger-sized controls. */
+@media (max-width: 640px) {
+    .composer-write-pop {
+        width: calc(100vw - 16px) !important;
+        max-width: 26rem;
+        max-height: min(72vh, 34rem);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        border-radius: 16px;
+    }
+
+    .composer-write-pop .composer-write-form {
+        width: 100%;
+        gap: 10px;
+        padding: 2px;
+    }
+
+    .composer-write-pop .form-label {
+        font-size: 0.95rem;
+    }
+
+    .composer-write-pop .composer-write-copy {
+        font-size: 0.78rem;
+    }
+
+    .composer-write-pop .composer-write-input {
+        min-height: 5.5rem;
+        font-size: 16px;
+    }
+
+    .composer-write-pop .composer-write-tones {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+    }
+
+    .composer-write-pop .composer-write-tone {
+        min-height: 38px;
+        padding: 0 8px;
+        font-size: 0.78rem;
+    }
+
+    .composer-hint {
+        display: none;
+    }
+
+    .composer-write-pop .link-actions {
+        gap: 8px;
+    }
+
+    .composer-write-pop .link-actions .p-button {
+        min-height: 42px;
+    }
+
+    .composer-write-pop .link-actions .p-button:not(.p-button-text) {
+        flex: 1;
+        justify-content: center;
+    }
+}
+
 /* --------------------------------------------------------------------------
    Details drawer + conversation search
    -------------------------------------------------------------------------- */

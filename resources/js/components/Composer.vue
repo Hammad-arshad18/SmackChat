@@ -7,7 +7,15 @@ import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
 import Mention from '@tiptap/extension-mention';
 import { useToast } from 'primevue/usetoast';
-import { getAiCapabilities, rewriteDraftLocally, writeDraftLocally } from '@/ai';
+import {
+    ai,
+    aiReadyBadge,
+    initAiCapabilities,
+    isDownloadRequired,
+    prepareModel,
+    rewriteDraftLocally,
+    writeDraftLocally,
+} from '@/ai';
 import api, { errorText } from '@/api';
 import { useOfficeStore } from '@/stores/office';
 import EmojiPicker from '@/components/EmojiPicker.vue';
@@ -32,6 +40,7 @@ const emojiPop = ref(null);
 const linkPop = ref(null);
 const aiPop = ref(null);
 const writePop = ref(null);
+const writeBtn = ref(null);
 const linkUrl = ref('');
 const mentionOpen = ref(false);
 const mentionItems = ref([]);
@@ -41,15 +50,15 @@ const fileInput = ref(null);
 const attachments = ref([]);
 const uploading = ref(false);
 const dragOver = ref(false);
-const canRewrite = ref(false);
-const canWrite = ref(false);
 const aiBusy = ref(false);
 const aiMode = ref('');
-const aiProgress = ref(null);
 const previousDraftBeforeAi = ref(null);
 const writeBrief = ref('');
 const writeTone = ref('neutral');
 const writeBriefInput = ref(null);
+const downloadConfirm = ref(false);
+const downloadBusy = ref(false);
+const pendingAiAction = ref(null);
 let mentionCommand = null;
 let typingAt = 0;
 let aiRun = 0;
@@ -199,12 +208,9 @@ onMounted(async () => {
     }
 
     try {
-        const capabilities = await getAiCapabilities();
-        canRewrite.value = capabilities.canRewrite;
-        canWrite.value = capabilities.canWrite;
+        await initAiCapabilities();
     } catch {
-        canRewrite.value = false;
-        canWrite.value = false;
+        /* the AI toolbar simply stays hidden */
     }
 });
 
@@ -212,9 +218,11 @@ const canAttach = computed(() => props.allowAttachments && !!props.channel && !p
 const isEmpty = computed(() => charCount.value === 0 && !attachments.value.length);
 const canSend = computed(() => !isEmpty.value && !uploading.value && !aiBusy.value && charCount.value <= 8000);
 const canGenerateWrite = computed(() => writeBrief.value.trim().length >= 3 && !aiBusy.value);
+const aiReady = computed(() => ai.engine !== 'unavailable');
+const aiBadgeLabel = computed(() => aiReadyBadge());
 const aiStatusLabel = computed(() => {
-    if (aiProgress.value != null) {
-        return `Downloading local AI: ${aiProgress.value}%`;
+    if (ai.modelState === 'downloading') {
+        return ai.downloadLabel;
     }
 
     if (!aiBusy.value) {
@@ -230,28 +238,45 @@ const writeToneOptions = [
     { label: 'Casual', value: 'casual' },
 ];
 
-const aiActions = [
-    {
-        label: 'Polish / Make professional',
-        icon: 'pi pi-sparkles',
-        command: () => runAiRewrite({ tone: 'more-formal', length: 'as-is', action: 'rewrite' }),
-    },
-    {
-        label: 'Make shorter',
-        icon: 'pi pi-minus',
-        command: () => runAiRewrite({ tone: 'as-is', length: 'shorter', action: 'rewrite' }),
-    },
-    {
-        label: 'More casual',
-        icon: 'pi pi-sun',
-        command: () => runAiRewrite({ tone: 'more-casual', length: 'as-is', action: 'rewrite' }),
-    },
-    {
-        label: 'Fix grammar & spelling',
-        icon: 'pi pi-check-circle',
-        command: () => runAiRewrite({ tone: 'as-is', length: 'as-is', action: 'fix-grammar' }),
-    },
-];
+const aiActions = computed(() => {
+    const items = [];
+
+    if (aiBadgeLabel.value) {
+        items.push({ label: aiBadgeLabel.value, disabled: true, class: 'composer-ai-badge' });
+        items.push({ separator: true });
+    }
+
+    items.push(
+        {
+            label: 'Make Professional',
+            icon: 'pi pi-briefcase',
+            command: () => runAiRewrite({ tone: 'more-formal', length: 'as-is', action: 'rewrite' }),
+        },
+        {
+            label: 'Make Shorter',
+            icon: 'pi pi-minus',
+            command: () => runAiRewrite({ tone: 'as-is', length: 'shorter', action: 'rewrite' }),
+        },
+        {
+            label: 'More Casual',
+            icon: 'pi pi-sun',
+            command: () => runAiRewrite({ tone: 'more-casual', length: 'as-is', action: 'rewrite' }),
+        },
+        {
+            label: 'Fix Grammar',
+            icon: 'pi pi-check-circle',
+            command: () => runAiRewrite({ tone: 'as-is', length: 'as-is', action: 'fix-grammar' }),
+        },
+        { separator: true },
+        {
+            label: 'Ask AI to Write…',
+            icon: 'pi pi-pen-to-square',
+            command: () => openWritePop(),
+        },
+    );
+
+    return items;
+});
 
 function openMention(suggestion) {
     mentionOpen.value = true;
@@ -307,7 +332,7 @@ function explainAiUnavailable(action = 'use on-device AI') {
     toast.add({
         severity: 'info',
         summary: 'On-device AI',
-        detail: `Chrome Built-in AI is needed to ${action} on this device. Nothing is sent to the server.`,
+        detail: `This browser cannot ${action} on this device. Nothing is sent to the server.`,
         life: 4200,
     });
 }
@@ -317,7 +342,7 @@ function toggleAi(event) {
         return;
     }
 
-    if (!canRewrite.value) {
+    if (!aiReady.value) {
         explainAiUnavailable('polish drafts');
         return;
     }
@@ -326,31 +351,119 @@ function toggleAi(event) {
         toast.add({
             severity: 'info',
             summary: 'AI Polish',
-            detail: 'Write a draft first, or use AI Write to generate one from notes.',
+            detail: 'Write a draft first, or use Ask AI to Write to generate one from notes.',
             life: 3200,
         });
         return;
     }
 
-    writePop.value?.hide?.();
     aiPop.value?.toggle(event);
 }
 
-async function toggleWrite(event) {
+async function openWritePop(event) {
     if (aiBusy.value) {
         return;
     }
 
-    if (!canWrite.value) {
+    if (!aiReady.value) {
         explainAiUnavailable('write drafts');
         return;
     }
 
     aiPop.value?.hide?.();
-    writePop.value?.toggle(event);
+
+    const target = writeBtn.value?.$el || writeBtn.value || event?.currentTarget;
+
+    if (!target) {
+        return;
+    }
+
+    if (event?.currentTarget) {
+        writePop.value?.toggle(event);
+    } else {
+        writePop.value?.show({ currentTarget: target }, target);
+    }
+
     await nextTick();
     const field = writeBriefInput.value?.$el || writeBriefInput.value;
     field?.focus?.();
+}
+
+/**
+ * Make sure the chosen engine has its model before an action runs.
+ * Gemini Nano is prepared straight from the click; the Transformers.js model
+ * needs an explicit one-time opt-in because it downloads hundreds of MB.
+ */
+async function ensureAiReady(action) {
+    try {
+        await initAiCapabilities();
+    } catch {
+        explainAiUnavailable('run on-device AI');
+        return false;
+    }
+
+    if (ai.engine === 'unavailable') {
+        explainAiUnavailable('run on-device AI');
+        return false;
+    }
+
+    if (ai.modelState === 'ready') {
+        return true;
+    }
+
+    if (ai.engine === 'gemini-nano') {
+        try {
+            await prepareModel();
+            return ai.modelState === 'ready';
+        } catch (error) {
+            if (!isDownloadRequired(error)) {
+                toast.add({
+                    severity: 'warn',
+                    summary: 'On-device AI',
+                    detail: errorText(error, 'Could not set up on-device AI.'),
+                    life: 3800,
+                });
+                return false;
+            }
+        }
+    }
+
+    pendingAiAction.value = action;
+    downloadConfirm.value = true;
+    return false;
+}
+
+async function confirmDownload() {
+    if (downloadBusy.value) {
+        return;
+    }
+
+    downloadBusy.value = true;
+
+    try {
+        await prepareModel();
+        downloadConfirm.value = false;
+        const action = pendingAiAction.value;
+        pendingAiAction.value = null;
+
+        if (ai.modelState === 'ready' && action) {
+            await action();
+        }
+    } catch (error) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Offline AI',
+            detail: errorText(error, 'Could not start the offline AI model on this device.'),
+            life: 4600,
+        });
+    } finally {
+        downloadBusy.value = false;
+    }
+}
+
+function cancelDownload() {
+    pendingAiAction.value = null;
+    downloadConfirm.value = false;
 }
 
 function inlineNodesFromLine(line) {
@@ -433,7 +546,6 @@ function beginAiRun() {
     const snapshot = editor.value?.getJSON() || { type: 'doc', content: [{ type: 'paragraph' }] };
     previousDraftBeforeAi.value = JSON.stringify(snapshot);
     aiBusy.value = true;
-    aiProgress.value = null;
 
     return ++aiRun;
 }
@@ -459,11 +571,23 @@ async function runAiRewrite(options) {
     }
 
     aiPop.value?.hide?.();
+    if (!(await ensureAiReady(() => performRewrite(options)))) {
+        return;
+    }
+
+    await performRewrite(options);
+}
+
+async function performRewrite(options) {
+    const current = editor.value?.getText() || '';
+    if (!current.trim() || aiBusy.value) {
+        return;
+    }
+
     aiMode.value = 'polish';
     const token = beginAiRun();
 
     try {
-        // create() must start from this user gesture when the model is downloadable
         const result = await rewriteDraftLocally(current, options, {
             onChunk: (chunk) => {
                 if (token !== aiRun) {
@@ -472,11 +596,6 @@ async function runAiRewrite(options) {
 
                 applyAiText(chunk);
             },
-            onDownloadProgress: (percent) => {
-                if (token === aiRun) {
-                    aiProgress.value = percent;
-                }
-            },
         });
 
         if (token !== aiRun) {
@@ -484,7 +603,6 @@ async function runAiRewrite(options) {
         }
 
         applyAiText(result || current);
-        aiProgress.value = null;
     } catch (error) {
         if (token !== aiRun) {
             return;
@@ -502,18 +620,29 @@ async function runAiRewrite(options) {
         if (token === aiRun) {
             aiBusy.value = false;
             aiMode.value = '';
-            aiProgress.value = null;
         }
     }
 }
 
 async function runAiWrite() {
     const brief = writeBrief.value.trim();
-    if (!canWrite.value || brief.length < 3 || aiBusy.value) {
+    if (!aiReady.value || brief.length < 3 || aiBusy.value) {
         return;
     }
 
-    writePop.value?.hide?.();
+    if (!(await ensureAiReady(() => performWrite()))) {
+        return;
+    }
+
+    await performWrite();
+}
+
+async function performWrite() {
+    const brief = writeBrief.value.trim();
+    if (brief.length < 3 || aiBusy.value) {
+        return;
+    }
+
     aiMode.value = 'write';
     const token = beginAiRun();
 
@@ -529,11 +658,6 @@ async function runAiWrite() {
 
                     applyAiText(chunk);
                 },
-                onDownloadProgress: (percent) => {
-                    if (token === aiRun) {
-                        aiProgress.value = percent;
-                    }
-                },
             },
         );
 
@@ -543,7 +667,7 @@ async function runAiWrite() {
 
         applyAiText(result || brief);
         writeBrief.value = '';
-        aiProgress.value = null;
+        writePop.value?.hide?.();
     } catch (error) {
         if (token !== aiRun) {
             return;
@@ -561,7 +685,6 @@ async function runAiWrite() {
         if (token === aiRun) {
             aiBusy.value = false;
             aiMode.value = '';
-            aiProgress.value = null;
         }
     }
 }
@@ -592,8 +715,8 @@ function clear() {
     previousDraftBeforeAi.value = null;
     aiBusy.value = false;
     aiMode.value = '';
-    aiProgress.value = null;
     writeBrief.value = '';
+    writePop.value?.hide?.();
     aiRun += 1;
     attachments.value.forEach((item) => {
         if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
@@ -775,7 +898,34 @@ onBeforeUnmount(() => {
 
         <Menu ref="aiPop" :model="aiActions" popup class="composer-ai-menu" />
 
-        <Popover ref="writePop" class="composer-write-pop">
+        <div v-if="attachments.length" class="composer-attachments">
+            <div
+                v-for="item in attachments"
+                :key="item.localId || item.id"
+                class="composer-attach-chip"
+                :class="{ uploading: item.uploading }"
+            >
+                <img v-if="item.previewUrl || item.kind === 'image'" :src="item.previewUrl || item.url" :alt="item.name" />
+                <i v-else :class="item.kind === 'video' ? 'pi pi-video' : 'pi pi-file'" />
+                <span>
+                    <strong>{{ item.name }}</strong>
+                    <small>{{ item.uploading ? 'Uploading…' : sizeLabel(item.size) }}</small>
+                </span>
+                <button type="button" aria-label="Remove attachment" @click="removeAttachment(item)">
+                    <i class="pi pi-times" />
+                </button>
+            </div>
+        </div>
+
+        <div v-if="ai.modelState === 'downloading'" class="ai-download-row">
+            <div class="ai-download-copy">
+                <i class="pi pi-cloud-download" />
+                <span>{{ ai.downloadLabel }}</span>
+            </div>
+            <ProgressBar :value="ai.downloadPercent" :show-value="false" class="ai-download-bar" />
+        </div>
+
+        <Popover ref="writePop" class="composer-write-pop" :pt="{ root: { class: 'composer-write-pop' } }">
             <form class="composer-write-form" @submit.prevent="runAiWrite">
                 <p class="form-label">Write with on-device AI</p>
                 <p class="composer-write-copy">Describe what you need — stays on this device.</p>
@@ -788,6 +938,7 @@ onBeforeUnmount(() => {
                     maxlength="1000"
                     placeholder="e.g. Ask the team if Friday’s demo can move to 3pm, keep it casual"
                     :disabled="aiBusy"
+                    class="composer-write-input"
                 />
                 <div class="composer-write-tones">
                     <button
@@ -815,25 +966,6 @@ onBeforeUnmount(() => {
                 </div>
             </form>
         </Popover>
-
-        <div v-if="attachments.length" class="composer-attachments">
-            <div
-                v-for="item in attachments"
-                :key="item.localId || item.id"
-                class="composer-attach-chip"
-                :class="{ uploading: item.uploading }"
-            >
-                <img v-if="item.previewUrl || item.kind === 'image'" :src="item.previewUrl || item.url" :alt="item.name" />
-                <i v-else :class="item.kind === 'video' ? 'pi pi-video' : 'pi pi-file'" />
-                <span>
-                    <strong>{{ item.name }}</strong>
-                    <small>{{ item.uploading ? 'Uploading…' : sizeLabel(item.size) }}</small>
-                </span>
-                <button type="button" aria-label="Remove attachment" @click="removeAttachment(item)">
-                    <i class="pi pi-times" />
-                </button>
-            </div>
-        </div>
 
         <div class="composer-shell">
             <div class="composer-toolbar">
@@ -937,6 +1069,8 @@ onBeforeUnmount(() => {
                 <Button icon="pi pi-link" text rounded size="small" aria-label="Link" @click="toggleLink" />
                 <span class="toolbar-divider" />
                 <Button
+                    v-if="aiReady"
+                    ref="writeBtn"
                     icon="pi pi-pen-to-square"
                     text
                     rounded
@@ -945,11 +1079,12 @@ onBeforeUnmount(() => {
                     :severity="aiBusy && aiMode === 'write' ? 'secondary' : undefined"
                     :loading="aiBusy && aiMode === 'write'"
                     :disabled="aiBusy"
-                    aria-label="AI Write"
-                    v-tooltip.top="canWrite ? 'AI Write · on-device' : 'AI Write · needs Chrome Built-in AI'"
-                    @click="toggleWrite"
+                    aria-label="Ask AI to write"
+                    v-tooltip.top="aiBadgeLabel || 'Ask AI to Write · on-device'"
+                    @click="openWritePop"
                 />
                 <Button
+                    v-if="aiReady"
                     icon="pi pi-sparkles"
                     text
                     rounded
@@ -958,8 +1093,8 @@ onBeforeUnmount(() => {
                     :severity="aiBusy && aiMode === 'polish' ? 'secondary' : undefined"
                     :loading="aiBusy && aiMode === 'polish'"
                     :disabled="aiBusy"
-                    aria-label="AI Polish"
-                    v-tooltip.top="canRewrite ? (isEmpty ? 'AI Polish · write a draft first' : 'AI Polish · on-device') : 'AI Polish · needs Chrome Built-in AI'"
+                    aria-label="AI rewrite"
+                    v-tooltip.top="aiBadgeLabel || (isEmpty ? 'AI rewrite · write a draft first' : 'AI rewrite · on-device')"
                     @click="toggleAi"
                 />
                 <Button
@@ -971,6 +1106,7 @@ onBeforeUnmount(() => {
                     aria-label="Undo AI"
                     @click="undoAi"
                 />
+                <span v-if="aiBadgeLabel" class="ai-ready-badge">{{ aiBadgeLabel }}</span>
                 <span class="composer-hint">
                     <template v-if="aiStatusLabel">{{ aiStatusLabel }}</template>
                     <template v-else>{{ canAttach ? 'Drop files here · Shift + Enter for a new line' : 'Shift + Enter for a new line' }}</template>
@@ -996,5 +1132,39 @@ onBeforeUnmount(() => {
                 @click="submit"
             />
         </div>
+
+        <Dialog v-model:visible="downloadConfirm" modal :style="{ width: '28rem' }" class="smack-dialog">
+            <template #header>
+                <div class="dialog-title">
+                    <span class="dialog-icon"><i class="pi pi-download" /></span>
+                    <div><strong>Download Offline AI</strong><small>One-time setup · stays on this device</small></div>
+                </div>
+            </template>
+            <div class="ai-download-dialog">
+                <p>
+                    Download Offline AI ({{ ai.modelSizeHint }})? Downloads once to this device so you can
+                    rewrite, draft, and summarize E2E messages privately offline. If the full model cannot
+                    run here, a smaller one is used automatically.
+                </p>
+                <div v-if="ai.modelState === 'downloading'" class="ai-download-row">
+                    <div class="ai-download-copy">
+                        <i class="pi pi-cloud-download" />
+                        <span>{{ ai.downloadLabel }}</span>
+                    </div>
+                    <ProgressBar :value="ai.downloadPercent" :show-value="false" class="ai-download-bar" />
+                </div>
+                <div class="link-actions">
+                    <Button label="Not now" text severity="secondary" size="small" :disabled="downloadBusy" @click="cancelDownload" />
+                    <Button
+                        label="Download Once & Enable"
+                        icon="pi pi-download"
+                        size="small"
+                        :loading="downloadBusy"
+                        :disabled="ai.modelState === 'downloading'"
+                        @click="confirmDownload"
+                    />
+                </div>
+            </div>
+        </Dialog>
     </div>
 </template>
