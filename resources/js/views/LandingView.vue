@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { RouterLink } from 'vue-router';
+import BrandMark from '@/components/BrandMark.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useUiStore } from '@/stores/ui';
 import { money } from '@/time';
@@ -228,7 +229,7 @@ function toggleTheme() {
 
         <header class="mk-nav mk-glass" :class="{ on: scrolled, open: mobileNav }">
             <a class="mk-logo" href="#top" @click.prevent="scrollTo('top')">
-                <span class="mk-logo-mark"><i class="pi pi-comment" /></span>
+                <BrandMark size="sm" class="mk-logo-mark" />
                 smack<span>.</span>
             </a>
 
@@ -544,7 +545,7 @@ function toggleTheme() {
         <footer class="mk-footer mk-glass">
             <div class="mk-footer-brand">
                 <a class="mk-logo" href="#top" @click.prevent="scrollTo('top')">
-                    <span class="mk-logo-mark"><i class="pi pi-comment" /></span>
+                    <BrandMark size="sm" class="mk-logo-mark" />
                     smack<span>.</span>
                 </a>
                 <p>Office chat for one company workspace. Encrypted messages, a floor clock, and attendance that files itself.</p>

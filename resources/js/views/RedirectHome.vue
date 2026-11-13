@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+import BrandMark from '@/components/BrandMark.vue';
 import { useAuthStore } from '@/stores/auth';
 
 const auth = useAuthStore();
@@ -14,7 +15,7 @@ onMounted(() => {
 
 <template>
     <div class="boot-screen">
-        <div class="boot-mark"><i class="pi pi-comment" /></div>
+        <BrandMark size="boot" />
         <strong>Opening your workspace</strong>
         <span>Finding the conversation…</span>
     </div>

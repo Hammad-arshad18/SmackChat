@@ -1,9 +1,10 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v5';
+const CACHE = 'smack-static-v6';
 const PRECACHE = [
     '/offline.html',
-    '/favicon.svg',
+    '/favicon.png',
     '/manifest.webmanifest',
+    '/brand/logo-mark.png',
     '/icons/icon-192.png',
     '/icons/icon-512.png',
     '/icons/apple-touch-icon.png',
@@ -58,7 +59,8 @@ self.addEventListener('fetch', (event) => {
     // Fingerprinted Vite assets + icons: cache-first.
     const staticAsset = url.pathname.startsWith('/build/assets/')
         || url.pathname.startsWith('/icons/')
-        || url.pathname === '/favicon.svg'
+        || url.pathname.startsWith('/brand/')
+        || url.pathname === '/favicon.png'
         || url.pathname === '/manifest.webmanifest'
         || url.pathname === '/offline.html';
 

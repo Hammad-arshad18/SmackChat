@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import { errorText } from '@/api';
+import BrandMark from '@/components/BrandMark.vue';
 import ShiftWidget from '@/components/ShiftWidget.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
@@ -102,7 +103,7 @@ function toggleUserMenu(event) {
     <div class="nav-panel">
         <div class="brand-row">
             <RouterLink :to="`/w/${office.slug}`" class="brand">
-                <span class="brand-mark"><i class="pi pi-comment" /></span>
+                <BrandMark />
                 <span class="brand-word">smack<span class="brand-dot">.</span></span>
             </RouterLink>
             <button type="button" class="icon-btn ghost" aria-label="Search" @click="emit('command')">

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import api, { errorText } from '@/api';
+import BrandMark from '@/components/BrandMark.vue';
 import CommandPalette from '@/components/CommandPalette.vue';
 import WorkspaceNav from '@/components/WorkspaceNav.vue';
 import { useAuthStore } from '@/stores/auth';
@@ -699,7 +700,7 @@ function openNotifications(event) {
     </div>
 
     <div v-else class="boot-screen">
-        <div class="boot-mark"><i class="pi pi-comment" /></div>
+        <BrandMark size="boot" />
         <strong>Opening {{ route.params.slug || 'your workspace' }}</strong>
         <span>Warming up the floor clock…</span>
     </div>

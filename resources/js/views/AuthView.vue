@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
+import BrandMark from '@/components/BrandMark.vue';
 import { useAuthStore } from '@/stores/auth';
 import { errorText } from '@/api';
 
@@ -99,7 +100,7 @@ function demo(email) {
         <section class="auth-story">
             <div class="auth-brand">
                 <RouterLink to="/" class="auth-brand-link">
-                    <span class="brand-mark"><i class="pi pi-comment" /></span>
+                    <BrandMark size="lg" />
                     <span class="brand-word">smack<span class="brand-dot">.</span></span>
                 </RouterLink>
                 <span class="auth-brand-note">Team chat, with a clock</span>

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import api, { ensureCsrf, errorText } from '@/api';
+import BrandMark from '@/components/BrandMark.vue';
 import { useAuthStore } from '@/stores/auth';
 
 const route = useRoute();
@@ -46,7 +47,7 @@ async function accept() {
     <div class="invite-page">
         <section class="invite-story">
             <div class="auth-brand">
-                <span class="brand-mark"><i class="pi pi-comment" /></span>
+                <BrandMark size="lg" />
                 <span class="brand-word">smack<span class="brand-dot">.</span></span>
             </div>
             <div class="invite-story-copy">
