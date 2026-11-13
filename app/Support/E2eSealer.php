@@ -9,8 +9,10 @@ use RuntimeException;
  * Client message format. The server checks the blob shape and never decrypts it.
  *
  * Wrap:   0x01 || ephemeral P-256 public (65) || nonce (12) || AES-256-GCM(channel key)
+ * Backup: 0x02 || nonce (12) || AES-256-GCM(channel key) under the account master key
  * Message: 0x01 || nonce (12) || AES-256-GCM(utf-8 JSON document)
  * Wrap key: HKDF-SHA256(ECDH shared, salt = ephemeral public, info = smackchat.wrap.v1.{deviceId})
+ * Backup AAD: smackchat.backup.v1.{channelId}
  * Message AAD: smackchat.message.v1.{channelId}
  */
 class E2eSealer
@@ -147,6 +149,132 @@ class E2eSealer
                 'wraps' => 'A conversation key is not valid.',
             ]);
         }
+    }
+
+    public static function assertBackupBlob(string $wrapped): void
+    {
+        $binary = self::decode($wrapped);
+        $valid = is_string($binary)
+            && strlen($binary) === 1 + 12 + 32 + 16
+            && $binary[0] === "\x02";
+
+        if (! $valid) {
+            throw ValidationException::withMessages([
+                'wrapped' => 'A conversation backup is not valid.',
+            ]);
+        }
+    }
+
+    public static function assertVaultBlob(string $wrapped): void
+    {
+        $binary = self::decode($wrapped);
+        $valid = is_string($binary)
+            && strlen($binary) === 1 + 12 + 32 + 16
+            && $binary[0] === "\x01";
+
+        if (! $valid) {
+            throw ValidationException::withMessages([
+                'wrapped_master' => 'The encryption vault is not valid.',
+            ]);
+        }
+    }
+
+    /**
+     * Account-master backup of a channel key. Used only in tests and docs; browsers seal this themselves.
+     */
+    public static function sealBackup(string $masterKey, int $channelId, string $channelKey): string
+    {
+        if (strlen($masterKey) !== 32 || strlen($channelKey) !== 32) {
+            throw new RuntimeException('Channel key backup is malformed.');
+        }
+
+        $nonce = random_bytes(12);
+        $tag = '';
+        $cipher = openssl_encrypt(
+            $channelKey,
+            'aes-256-gcm',
+            $masterKey,
+            OPENSSL_RAW_DATA,
+            $nonce,
+            $tag,
+            'smackchat.backup.v1.'.$channelId
+        );
+
+        if ($cipher === false || strlen($tag) !== 16) {
+            throw new RuntimeException('Channel key backup failed.');
+        }
+
+        return self::encode("\x02".$nonce.$cipher.$tag);
+    }
+
+    public static function openBackup(string $masterKey, int $channelId, string $wrapped): string
+    {
+        $binary = self::decode($wrapped);
+        if ($binary === null || strlen($binary) !== 1 + 12 + 32 + 16 || $binary[0] !== "\x02") {
+            throw new RuntimeException('Channel key backup is malformed.');
+        }
+
+        $nonce = substr($binary, 1, 12);
+        $cipher = substr($binary, 13, 32);
+        $tag = substr($binary, 45, 16);
+        $plain = openssl_decrypt(
+            $cipher,
+            'aes-256-gcm',
+            $masterKey,
+            OPENSSL_RAW_DATA,
+            $nonce,
+            $tag,
+            'smackchat.backup.v1.'.$channelId
+        );
+
+        if (! is_string($plain) || strlen($plain) !== 32) {
+            throw new RuntimeException('Channel key backup could not be opened.');
+        }
+
+        return $plain;
+    }
+
+    public static function wrapMaster(string $masterKey, string $password, ?string $salt = null): array
+    {
+        if (strlen($masterKey) !== 32) {
+            throw new RuntimeException('Master key is malformed.');
+        }
+
+        $salt ??= random_bytes(16);
+        $kek = hash_pbkdf2('sha256', $password, $salt, 600_000, 32, true);
+        $nonce = random_bytes(12);
+        $tag = '';
+        $cipher = openssl_encrypt($masterKey, 'aes-256-gcm', $kek, OPENSSL_RAW_DATA, $nonce, $tag, 'smackchat.vault.v1');
+
+        if ($cipher === false || strlen($tag) !== 16) {
+            throw new RuntimeException('Vault wrap failed.');
+        }
+
+        return [
+            'salt' => self::encode($salt),
+            'wrapped_master' => self::encode("\x01".$nonce.$cipher.$tag),
+        ];
+    }
+
+    public static function openMaster(string $wrappedMaster, string $password, string $salt): string
+    {
+        $binary = self::decode($wrappedMaster);
+        $saltBytes = self::decode($salt);
+        if ($binary === null || $saltBytes === null || strlen($binary) !== 1 + 12 + 32 + 16 || $binary[0] !== "\x01") {
+            throw new RuntimeException('Vault wrap is malformed.');
+        }
+
+        $kek = hash_pbkdf2('sha256', $password, $saltBytes, 600_000, 32, true);
+        $nonce = substr($binary, 1, 12);
+        $cipher = substr($binary, 13, 32);
+        $tag = substr($binary, 45, 16);
+        $plain = openssl_decrypt($cipher, 'aes-256-gcm', $kek, OPENSSL_RAW_DATA, $nonce, $tag, 'smackchat.vault.v1');
+
+        if (! is_string($plain) || strlen($plain) !== 32) {
+            throw new RuntimeException('Vault could not be opened.');
+        }
+
+        return $plain;
     }
 
     public static function encode(string $binary): string

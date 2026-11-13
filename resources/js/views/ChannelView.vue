@@ -16,7 +16,7 @@ import {
     writeCachedThreadSummary,
 } from '@/ai';
 import api, { errorText } from '@/api';
-import { plainText, revealMessage, sealDocument, searchMessages } from '@/e2e';
+import { plainText, revealMessage, sealDocument, searchMessages, sessionKey } from '@/e2e';
 import Composer from '@/components/Composer.vue';
 import EmojiPicker from '@/components/EmojiPicker.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
@@ -77,6 +77,7 @@ const downloadBusy = ref(false);
 const pendingDownloadAction = ref(null);
 let poll;
 let polling = true;
+let keyRetry;
 let stopTyping = () => {};
 let typingTimer;
 let searchTimer;
@@ -343,6 +344,7 @@ async function load() {
     }
 
     setupTyping();
+    scheduleKeyRetry();
 }
 
 function syncThreadQuery(ref, history = 'replace') {
@@ -825,6 +827,52 @@ async function hydrate(list) {
     return opened;
 }
 
+function hasLockedMessages() {
+    return messages.value.some((message) => message.locked)
+        || replies.value.some((message) => message.locked)
+        || thread.value?.locked;
+}
+
+async function unlockLockedMessages() {
+    if (!current.value || !hasLockedMessages()) {
+        return;
+    }
+
+    try {
+        await sessionKey(office, current.value);
+    } catch {
+        return;
+    }
+
+    if (messages.value.some((message) => message.locked)) {
+        messages.value = await hydrate(messages.value);
+    }
+
+    if (replies.value.some((message) => message.locked)) {
+        replies.value = await hydrate(replies.value);
+    }
+
+    if (thread.value?.locked) {
+        thread.value = await revealMessage(office, thread.value);
+    }
+}
+
+function scheduleKeyRetry() {
+    clearTimeout(keyRetry);
+    if (!polling || !hasLockedMessages()) {
+        return;
+    }
+
+    keyRetry = setTimeout(async () => {
+        try {
+            await unlockLockedMessages();
+        } catch {
+            /* the next pass retries */
+        }
+        scheduleKeyRetry();
+    }, 4000);
+}
+
 async function absorb(payload) {
     if (payload?.message) {
         payload = { ...payload, message: await revealMessage(office, payload.message) };
@@ -1215,6 +1263,7 @@ onMounted(async () => {
     }
 
     await load();
+    scheduleKeyRetry();
     window.addEventListener('smack-message', onLive);
     whenRealtime().finally(schedulePoll);
 });
@@ -1223,6 +1272,7 @@ onBeforeUnmount(() => {
     reportViewing(null, null);
     polling = false;
     clearTimeout(poll);
+    clearTimeout(keyRetry);
     clearTimeout(typingTimer);
     clearTimeout(searchTimer);
     clearTimeout(focusTimer);
@@ -1397,7 +1447,7 @@ onBeforeUnmount(() => {
                                     <p v-if="message.deleted" class="deleted-copy">This message was deleted.</p>
                                     <template v-else>
                                         <MessageBody v-if="message.document" :node="message.document" />
-                                        <p v-else-if="message.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device.</p>
+                                        <p v-else-if="message.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device. Sign in again if you just opened a new browser.</p>
                                         <MessageAttachments
                                             v-if="message.attachments?.length"
                                             :items="message.attachments"
@@ -1610,7 +1660,7 @@ onBeforeUnmount(() => {
                         </div>
                         <div class="thread-parent-body" :class="{ 'is-emoji-only': isEmojiOnly(thread) }">
                             <MessageBody v-if="thread.document" :node="thread.document" />
-                            <p v-else-if="thread.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device.</p>
+                            <p v-else-if="thread.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device. Sign in again if you just opened a new browser.</p>
                             <MessageAttachments
                                 v-if="thread.attachments?.length"
                                 :items="thread.attachments"
@@ -1669,7 +1719,7 @@ onBeforeUnmount(() => {
                                 <p v-if="reply.deleted" class="deleted-copy">This reply was deleted.</p>
                                 <template v-else>
                                     <MessageBody v-if="reply.document" :node="reply.document" />
-                                    <p v-else-if="reply.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device.</p>
+                                    <p v-else-if="reply.cipher === 'e2e'" class="locked-copy">Waiting for the conversation key on this device. Sign in again if you just opened a new browser.</p>
                                     <MessageAttachments
                                         v-if="reply.attachments?.length"
                                         :items="reply.attachments"

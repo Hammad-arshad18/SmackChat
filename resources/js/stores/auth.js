@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import api, { ensureCsrf } from '@/api';
-import { ensureDevice, forgetEncryption } from '@/e2e';
+import { ensureDevice, forgetEncryption, unlockEncryption } from '@/e2e';
 import { disablePush } from '@/push';
 
 export const useAuthStore = defineStore('auth', {
@@ -9,12 +9,22 @@ export const useAuthStore = defineStore('auth', {
         ready: false,
     }),
     actions: {
+        async bootEncryption(userId, password = null) {
+            if (!userId) {
+                return;
+            }
+
+            await ensureDevice(userId);
+            if (password) {
+                await unlockEncryption(password);
+            }
+        },
         async fetchMe() {
             try {
                 const { data } = await api.get('/me');
                 this.user = data.user;
                 if (data.user?.id) {
-                    await ensureDevice(data.user.id).catch(() => {});
+                    await this.bootEncryption(data.user.id).catch(() => {});
                 }
             } catch {
                 this.user = null;
@@ -30,11 +40,12 @@ export const useAuthStore = defineStore('auth', {
         },
         async verifyRegistration(payload) {
             await ensureCsrf();
-            const { data } = await api.post('/register/verify', payload);
+            const { password, ...body } = payload;
+            const { data } = await api.post('/register/verify', body);
             this.user = data.user;
             this.ready = true;
             if (data.user?.id) {
-                await ensureDevice(data.user.id).catch(() => {});
+                await this.bootEncryption(data.user.id, password).catch(() => {});
             }
 
             return data.workspace_slug;
@@ -51,7 +62,7 @@ export const useAuthStore = defineStore('auth', {
             this.user = data.user;
             this.ready = true;
             if (data.user?.id) {
-                await ensureDevice(data.user.id).catch(() => {});
+                await this.bootEncryption(data.user.id, payload.password).catch(() => {});
             }
         },
         async updateProfile(payload) {
@@ -80,11 +91,11 @@ export const useAuthStore = defineStore('auth', {
             forgetEncryption();
             this.user = null;
         },
-        adopt(user) {
+        async adopt(user, password = null) {
             this.user = user;
             this.ready = true;
             if (user?.id) {
-                ensureDevice(user.id).catch(() => {});
+                await this.bootEncryption(user.id, password).catch(() => {});
             }
         },
     },

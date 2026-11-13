@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\AblyPublisher;
 use App\Services\WebPushNotifier;
 use App\Services\WorkspaceProvisioner;
+use App\Support\E2eSealer;
 use App\Support\OpaqueId;
 use Base64Url\Base64Url;
 use GuzzleHttp\Psr7\Response;
@@ -958,6 +959,107 @@ class OfficeChatTest extends TestCase
             ->deleteJson("/api/workspaces/{$workspace->slug}/logo")
             ->assertOk()
             ->assertJsonPath('workspace.logo_url', null);
+    }
+
+    public function test_a_second_device_can_receive_conversation_keys_from_an_existing_device(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $first = $this->party($owner);
+        $first->send($this, $workspace->slug, 'general', 'Keep this for the laptop.')
+            ->assertCreated();
+
+        $this->actingAs($owner, 'sanctum');
+        $second = E2eParty::register($this);
+        $bundle = $this->getJson("/api/workspaces/{$workspace->slug}/channels/general/keys")
+            ->assertOk()
+            ->json();
+        $this->assertNull(collect($bundle['wraps'])->firstWhere('device_id', $second->deviceId()));
+
+        $this->actingAs($owner, 'sanctum');
+        $first->shareMissing($this, $workspace->slug, 'general');
+
+        $this->actingAs($owner, 'sanctum');
+        $message = collect($this->getJson("/api/workspaces/{$workspace->slug}/channels/general/messages")
+            ->assertOk()
+            ->json('messages'))
+            ->first(fn (array $row) => $row['cipher'] === 'e2e' && $row['sealed']);
+        $this->assertSame(
+            'Keep this for the laptop.',
+            $second->plain($this, $workspace->slug, 'general', $message)
+        );
+        $second->send($this, $workspace->slug, 'general', 'Sent from the new browser.')
+            ->assertCreated();
+    }
+
+    public function test_a_new_device_can_restore_conversation_keys_from_the_password_vault(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $first = $this->party($owner);
+        $first->installVault($this, 'password');
+        $first->send($this, $workspace->slug, 'general', 'Vault this for later.')
+            ->assertCreated();
+        $first->backupChannel($this, $workspace->slug, 'general');
+
+        $this->actingAs($owner, 'sanctum');
+        $second = E2eParty::register($this);
+        $bundle = $this->getJson("/api/workspaces/{$workspace->slug}/channels/general/keys")
+            ->assertOk()
+            ->json();
+        $this->assertNull(collect($bundle['wraps'])->firstWhere('device_id', $second->deviceId()));
+
+        $second->unlockVault($this, 'password');
+        $second->claimFromVault($this, $workspace->slug, 'general');
+        $message = collect($this->getJson("/api/workspaces/{$workspace->slug}/channels/general/messages")
+            ->assertOk()
+            ->json('messages'))
+            ->first(fn (array $row) => $row['cipher'] === 'e2e' && $row['sealed']);
+        $this->assertSame(
+            'Vault this for later.',
+            $second->plain($this, $workspace->slug, 'general', $message)
+        );
+        $second->send($this, $workspace->slug, 'general', 'Recovered and sending.')
+            ->assertCreated();
+    }
+
+    public function test_an_existing_encryption_vault_is_not_replaced(): void
+    {
+        $owner = $this->openOffice();
+        $this->actingAs($owner, 'sanctum');
+        $first = E2eSealer::wrapMaster(random_bytes(32), 'password');
+        $this->putJson('/api/e2e/vault', $first)->assertOk()
+            ->assertJsonPath('vault.salt', $first['salt'])
+            ->assertJsonPath('vault.wrapped_master', $first['wrapped_master']);
+
+        $second = E2eSealer::wrapMaster(random_bytes(32), 'password');
+        $this->putJson('/api/e2e/vault', $second)->assertOk()
+            ->assertJsonPath('vault.salt', $first['salt'])
+            ->assertJsonPath('vault.wrapped_master', $first['wrapped_master']);
+    }
+
+    public function test_a_device_without_the_key_or_vault_cannot_overwrite_conversation_wraps(): void
+    {
+        $owner = $this->openOffice();
+        $member = User::factory()->create(['email' => 'grace@northwind.test']);
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $member, 'member');
+
+        $this->party($owner)->send($this, $workspace->slug, 'general', 'Owner started the key.')
+            ->assertCreated();
+
+        $this->actingAs($member, 'sanctum');
+        $intruder = E2eParty::register($this);
+        $bundle = $this->getJson("/api/workspaces/{$workspace->slug}/channels/general/keys")->assertOk()->json();
+        $device = collect($bundle['devices'])->firstWhere('id', $intruder->deviceId());
+        $fake = random_bytes(32);
+
+        $this->putJson("/api/workspaces/{$workspace->slug}/channels/general/keys", [
+            'wraps' => [[
+                'device_id' => $intruder->deviceId(),
+                'wrapped' => E2eSealer::wrap($fake, base64_decode($device['public_key']), $intruder->deviceId()),
+            ]],
+        ])->assertStatus(409);
     }
 
     private function party(User $user): E2eParty

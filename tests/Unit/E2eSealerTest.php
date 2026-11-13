@@ -23,4 +23,16 @@ class E2eSealerTest extends TestCase
         $this->assertStringNotContainsString('The launch number is 42.', $sealed);
         $this->assertSame($document, E2eSealer::openMessage($opened, 15, $sealed));
     }
+
+    public function test_a_password_vault_opens_a_channel_backup(): void
+    {
+        $master = random_bytes(32);
+        $channelKey = random_bytes(32);
+        $vault = E2eSealer::wrapMaster($master, 'correct horse battery');
+        $openedMaster = E2eSealer::openMaster($vault['wrapped_master'], 'correct horse battery', $vault['salt']);
+        $backup = E2eSealer::sealBackup($openedMaster, 9, $channelKey);
+
+        $this->assertSame($master, $openedMaster);
+        $this->assertSame($channelKey, E2eSealer::openBackup($openedMaster, 9, $backup));
+    }
 }

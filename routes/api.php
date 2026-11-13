@@ -25,6 +25,10 @@ Route::post('/invitations/{token}/accept', [InvitationController::class, 'accept
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::post('/e2e/devices', [E2eController::class, 'device']);
+    Route::get('/e2e/vault', [E2eController::class, 'showVault']);
+    Route::put('/e2e/vault', [E2eController::class, 'updateVault']);
+    Route::get('/e2e/vault/channels/{channel}', [E2eController::class, 'showBackup'])->whereNumber('channel');
+    Route::put('/e2e/vault/channels', [E2eController::class, 'updateBackups']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me', [AuthController::class, 'updateProfile']);
     Route::post('/me/avatar', [AuthController::class, 'updateAvatar']);

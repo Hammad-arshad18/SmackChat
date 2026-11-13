@@ -31,7 +31,8 @@ async function accept() {
         await ensureCsrf();
         const payload = auth.user ? {} : form.value;
         const { data } = await api.post(`/invitations/${route.params.token}/accept`, payload);
-        auth.adopt(data.user);
+        const password = auth.user ? null : form.value.password;
+        await auth.adopt(data.user, password);
         router.push(`/w/${data.workspace_slug}`);
     } catch (caught) {
         error.value = errorText(caught);

@@ -4,7 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Channel;
 use App\Models\ChannelKeyWrap;
+use App\Models\E2eChannelBackup;
 use App\Models\E2eDevice;
+use App\Models\E2eVault;
+use App\Models\WorkspaceMember;
 use App\Services\ChannelAccess;
 use App\Support\E2eSealer;
 use Illuminate\Http\Request;
@@ -50,6 +53,104 @@ class E2eController extends ApiController
         ]);
     }
 
+    public function showVault(Request $request)
+    {
+        $vault = E2eVault::query()->where('user_id', $request->user()->id)->first();
+
+        return response()->json([
+            'vault' => $vault ? [
+                'salt' => $vault->salt,
+                'wrapped_master' => $vault->wrapped_master,
+            ] : null,
+        ]);
+    }
+
+    public function updateVault(Request $request)
+    {
+        $data = $request->validate([
+            'salt' => ['required', 'string', 'max:64'],
+            'wrapped_master' => ['required', 'string', 'max:400'],
+        ]);
+
+        $salt = base64_decode($data['salt'], true);
+        if (! is_string($salt) || strlen($salt) !== 16) {
+            throw ValidationException::withMessages([
+                'salt' => 'The encryption vault salt is not valid.',
+            ]);
+        }
+
+        E2eSealer::assertVaultBlob($data['wrapped_master']);
+
+        // Never replace an existing vault — a second browser must unlock the same master.
+        $vault = E2eVault::query()->firstOrCreate(
+            ['user_id' => $request->user()->id],
+            [
+                'salt' => base64_encode($salt),
+                'wrapped_master' => $data['wrapped_master'],
+            ]
+        );
+
+        return response()->json([
+            'vault' => [
+                'salt' => $vault->salt,
+                'wrapped_master' => $vault->wrapped_master,
+            ],
+        ]);
+    }
+
+    public function showBackup(Request $request, int $channel, ChannelAccess $access)
+    {
+        $model = Channel::query()->findOrFail($channel);
+        $this->assertChannelMember($request, $model, $access);
+
+        $backup = E2eChannelBackup::query()
+            ->where('user_id', $request->user()->id)
+            ->where('channel_id', $model->id)
+            ->first();
+
+        return response()->json([
+            'backup' => $backup ? [
+                'channel_id' => $backup->channel_id,
+                'wrapped' => $backup->wrapped,
+            ] : null,
+        ]);
+    }
+
+    public function updateBackups(Request $request, ChannelAccess $access)
+    {
+        $data = $request->validate([
+            'channels' => ['required', 'array', 'min:1', 'max:200'],
+            'channels.*.channel_id' => ['required', 'integer'],
+            'channels.*.wrapped' => ['required', 'string', 'max:400'],
+        ]);
+
+        foreach ($data['channels'] as $row) {
+            E2eSealer::assertBackupBlob($row['wrapped']);
+        }
+
+        $saved = [];
+
+        foreach ($data['channels'] as $row) {
+            $model = Channel::query()->findOrFail((int) $row['channel_id']);
+            $this->assertChannelMember($request, $model, $access);
+
+            $backup = E2eChannelBackup::query()->updateOrCreate(
+                [
+                    'user_id' => $request->user()->id,
+                    'channel_id' => $model->id,
+                ],
+                ['wrapped' => $row['wrapped']]
+            );
+
+            $saved[] = [
+                'channel_id' => $backup->channel_id,
+                'wrapped' => $backup->wrapped,
+            ];
+        }
+
+        return response()->json(['channels' => $saved]);
+    }
+
     public function show(Request $request, string $workspace, string $channel, ChannelAccess $access)
     {
         $model = $access->find($this->workspace($request), $channel);
@@ -84,6 +185,11 @@ class E2eController extends ApiController
                 ->lockForUpdate()
                 ->get();
             $callerHasKey = $existing->contains(fn (ChannelKeyWrap $wrap) => in_array($wrap->device_id, $callerDeviceIds, true));
+            $callerHasBackup = E2eChannelBackup::query()
+                ->where('channel_id', $model->id)
+                ->where('user_id', $request->user()->id)
+                ->lockForUpdate()
+                ->exists();
 
             if ($existing->isEmpty()) {
                 $includesCaller = collect($data['wraps'])->contains(
@@ -94,7 +200,7 @@ class E2eController extends ApiController
                         'wraps' => 'Register this device before starting the conversation key.',
                     ]);
                 }
-            } elseif (! $callerHasKey) {
+            } elseif (! $callerHasKey && ! $callerHasBackup) {
                 abort(409, 'This conversation key is already held by another device.');
             }
 
@@ -103,6 +209,12 @@ class E2eController extends ApiController
                 if (! $devices->has($deviceId)) {
                     throw ValidationException::withMessages([
                         'wraps' => 'One of those devices cannot join this conversation.',
+                    ]);
+                }
+
+                if (! $callerHasKey && $callerHasBackup && (int) $devices->get($deviceId)->user_id !== $request->user()->id) {
+                    throw ValidationException::withMessages([
+                        'wraps' => 'Restore this device before sharing keys with teammates.',
                     ]);
                 }
 
@@ -119,6 +231,16 @@ class E2eController extends ApiController
         });
 
         return response()->json($bundle);
+    }
+
+    private function assertChannelMember(Request $request, Channel $channel, ChannelAccess $access): void
+    {
+        $member = WorkspaceMember::query()
+            ->where('workspace_id', $channel->workspace_id)
+            ->where('user_id', $request->user()->id)
+            ->exists();
+        abort_unless($member, 403, 'That conversation is private.');
+        $access->assertCanView($channel, $request->user());
     }
 
     private function bundle(Channel $channel): array

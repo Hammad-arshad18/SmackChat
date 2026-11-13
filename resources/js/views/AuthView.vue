@@ -55,6 +55,7 @@ async function submit() {
             const slug = await auth.verifyRegistration({
                 email: pendingEmail.value || form.value.email,
                 code: String(otp.value || '').replace(/\D/g, '').slice(0, 6),
+                password: form.value.password,
             });
             router.push(`/w/${slug}`);
             return;

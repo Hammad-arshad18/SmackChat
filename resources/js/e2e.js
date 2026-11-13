@@ -1,11 +1,20 @@
 import api from '@/api';
 
 const channelKeys = new Map();
+const backedUpChannels = new Set();
+const shareInflight = new Set();
+const shareTimers = new Map();
+const shareCheckedAt = new Map();
 let activeUserId = null;
 let identity = null;
+let masterKey = null;
 
 function storageKey(userId) {
     return `smackchat.e2e.v1.${userId}`;
+}
+
+function masterStorageKey(userId) {
+    return `smackchat.e2e.master.v1.${userId}`;
 }
 
 function bytesToB64(bytes) {
@@ -39,6 +48,29 @@ async function aesFromShared(shared, salt, info) {
             hash: 'SHA-256',
             salt,
             info: new TextEncoder().encode(info),
+        },
+        material,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt'],
+    );
+}
+
+async function deriveKek(password, salt) {
+    const material = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(password),
+        'PBKDF2',
+        false,
+        ['deriveKey'],
+    );
+
+    return crypto.subtle.deriveKey(
+        {
+            name: 'PBKDF2',
+            salt,
+            iterations: 600000,
+            hash: 'SHA-256',
         },
         material,
         { name: 'AES-GCM', length: 256 },
@@ -100,10 +132,140 @@ async function unwrapRaw(wrapped, me) {
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, aes, cipher));
 }
 
+async function sealBackup(master, channelId, rawKey) {
+    const aes = await crypto.subtle.importKey('raw', master, 'AES-GCM', false, ['encrypt']);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const cipher = new Uint8Array(await crypto.subtle.encrypt({
+        name: 'AES-GCM',
+        iv: nonce,
+        additionalData: new TextEncoder().encode(`smackchat.backup.v1.${channelId}`),
+    }, aes, rawKey));
+    const out = new Uint8Array(1 + nonce.length + cipher.length);
+    out[0] = 2;
+    out.set(nonce, 1);
+    out.set(cipher, 13);
+
+    return bytesToB64(out);
+}
+
+async function openBackup(master, channelId, wrapped) {
+    const blob = b64ToBytes(wrapped);
+    const aes = await crypto.subtle.importKey('raw', master, 'AES-GCM', false, ['decrypt']);
+
+    return new Uint8Array(await crypto.subtle.decrypt({
+        name: 'AES-GCM',
+        iv: blob.slice(1, 13),
+        additionalData: new TextEncoder().encode(`smackchat.backup.v1.${channelId}`),
+    }, aes, blob.slice(13)));
+}
+
+function persistMaster(userId, raw) {
+    masterKey = raw;
+
+    try {
+        sessionStorage.setItem(masterStorageKey(userId), bytesToB64(raw));
+    } catch {
+        /* private mode can block sessionStorage */
+    }
+}
+
+function restoreMaster(userId) {
+    if (masterKey) {
+        return masterKey;
+    }
+
+    try {
+        const stored = sessionStorage.getItem(masterStorageKey(userId));
+        if (stored) {
+            masterKey = b64ToBytes(stored);
+        }
+    } catch {
+        masterKey = null;
+    }
+
+    return masterKey;
+}
+
+function clearMaster(userId) {
+    masterKey = null;
+
+    try {
+        if (userId) {
+            sessionStorage.removeItem(masterStorageKey(userId));
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
 export function forgetEncryption() {
+    clearMaster(activeUserId);
     activeUserId = null;
     identity = null;
     channelKeys.clear();
+    backedUpChannels.clear();
+    shareInflight.clear();
+    shareCheckedAt.clear();
+    shareTimers.forEach((timer) => clearTimeout(timer));
+    shareTimers.clear();
+}
+
+async function openVaultRecord(vault, password) {
+    const salt = b64ToBytes(vault.salt);
+    const blob = b64ToBytes(vault.wrapped_master);
+    const kek = await deriveKek(password, salt);
+
+    return new Uint8Array(await crypto.subtle.decrypt({
+        name: 'AES-GCM',
+        iv: blob.slice(1, 13),
+        additionalData: new TextEncoder().encode('smackchat.vault.v1'),
+    }, kek, blob.slice(13)));
+}
+
+async function sealVaultRecord(master, password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const kek = await deriveKek(password, salt);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const cipher = new Uint8Array(await crypto.subtle.encrypt({
+        name: 'AES-GCM',
+        iv: nonce,
+        additionalData: new TextEncoder().encode('smackchat.vault.v1'),
+    }, kek, master));
+    const out = new Uint8Array(1 + nonce.length + cipher.length);
+    out[0] = 1;
+    out.set(nonce, 1);
+    out.set(cipher, 13);
+
+    return {
+        salt: bytesToB64(salt),
+        wrapped_master: bytesToB64(out),
+    };
+}
+
+export async function unlockEncryption(password) {
+    if (!password || !activeUserId || !globalThis.crypto?.subtle) {
+        return false;
+    }
+
+    let { data } = await api.get('/e2e/vault');
+
+    if (!data.vault) {
+        const provisional = crypto.getRandomValues(new Uint8Array(32));
+        const sealed = await sealVaultRecord(provisional, password);
+        const created = await api.put('/e2e/vault', sealed);
+        // Another browser may have won the create race — always unlock whatever the server kept.
+        data = { vault: created.data.vault };
+    }
+
+    const master = await openVaultRecord(data.vault, password);
+    persistMaster(activeUserId, master);
+    backedUpChannels.clear();
+
+    for (const [channelId, raw] of channelKeys.entries()) {
+        await rememberBackup({ id: channelId }, raw).catch(() => {});
+    }
+
+    return true;
 }
 
 export async function ensureDevice(userId) {
@@ -112,14 +274,20 @@ export async function ensureDevice(userId) {
     }
 
     if (identity?.userId === userId && identity.privateKey) {
+        restoreMaster(userId);
+
         return identity;
     }
 
     if (identity?.userId !== userId) {
         channelKeys.clear();
+        backedUpChannels.clear();
+        shareCheckedAt.clear();
+        clearMaster(identity?.userId);
     }
 
     activeUserId = userId;
+    restoreMaster(userId);
     const key = storageKey(userId);
     let stored = null;
 
@@ -175,13 +343,122 @@ async function bundleFor(office, channel) {
     return data;
 }
 
+async function rememberBackup(channel, raw) {
+    const master = restoreMaster(activeUserId);
+    if (!master || !channel?.id || backedUpChannels.has(channel.id)) {
+        return;
+    }
+
+    const wrapped = await sealBackup(master, channel.id, raw);
+    await api.put('/e2e/vault/channels', {
+        channels: [{ channel_id: channel.id, wrapped }],
+    });
+    backedUpChannels.add(channel.id);
+}
+
+async function publishWraps(office, channel, wraps) {
+    if (!wraps.length) {
+        return bundleFor(office, channel);
+    }
+
+    try {
+        const { data } = await api.put(`/workspaces/${office.slug}/channels/${channel.slug}/keys`, { wraps });
+
+        return data;
+    } catch (error) {
+        if (error?.response?.status !== 409) {
+            throw error;
+        }
+
+        return bundleFor(office, channel);
+    }
+}
+
+async function wrapsForDevices(raw, devices) {
+    const wraps = [];
+
+    for (const device of devices) {
+        wraps.push({
+            device_id: device.id,
+            wrapped: await wrapRaw(raw, device.public_key, device.id),
+        });
+    }
+
+    return wraps;
+}
+
+async function shareMissing(office, channel, raw, { force = false } = {}) {
+    if (!office?.slug || !channel?.slug || !channel?.id || shareInflight.has(channel.id)) {
+        return;
+    }
+
+    const lastChecked = shareCheckedAt.get(channel.id) || 0;
+    if (!force && Date.now() - lastChecked < 15000) {
+        return;
+    }
+
+    shareInflight.add(channel.id);
+
+    try {
+        const bundle = await bundleFor(office, channel);
+        shareCheckedAt.set(channel.id, Date.now());
+        const missing = bundle.devices.filter((device) => !bundle.wraps.some((item) => item.device_id === device.id));
+
+        if (!missing.length) {
+            return;
+        }
+
+        await publishWraps(office, channel, await wrapsForDevices(raw, missing));
+    } finally {
+        shareInflight.delete(channel.id);
+    }
+}
+
+function queueShareMissing(office, channel, raw, options = {}) {
+    if (!channel?.id) {
+        return;
+    }
+
+    clearTimeout(shareTimers.get(channel.id));
+    shareTimers.set(channel.id, setTimeout(() => {
+        shareMissing(office, channel, raw, options).catch(() => {});
+    }, 75));
+}
+
+async function recoverFromVault(office, channel, me) {
+    const master = restoreMaster(activeUserId);
+    if (!master) {
+        return null;
+    }
+
+    const { data } = await api.get(`/e2e/vault/channels/${channel.id}`);
+    if (!data.backup?.wrapped) {
+        return null;
+    }
+
+    const raw = await openBackup(master, channel.id, data.backup.wrapped);
+    const bundle = await bundleFor(office, channel);
+    const mine = bundle.devices.filter((device) => device.user_id === me.userId
+        && !bundle.wraps.some((item) => item.device_id === device.id));
+
+    if (mine.length) {
+        await publishWraps(office, channel, await wrapsForDevices(raw, mine));
+    }
+
+    return raw;
+}
+
 export async function sessionKey(office, channel) {
     if (!office?.slug || !channel?.id || !activeUserId) {
         return null;
     }
 
     if (channelKeys.has(channel.id)) {
-        return channelKeys.get(channel.id);
+        const cached = channelKeys.get(channel.id);
+        queueShareMissing(office, channel, cached);
+        rememberBackup(channel, cached).catch(() => {});
+
+        return cached;
     }
 
     const me = await ensureDevice(activeUserId);
@@ -194,57 +471,83 @@ export async function sessionKey(office, channel) {
 
     if (!wrap && bundle.wraps.length === 0 && bundle.devices.some((device) => device.id === me.deviceId)) {
         const raw = crypto.getRandomValues(new Uint8Array(32));
-        const wraps = [];
-
-        for (const device of bundle.devices) {
-            wraps.push({
-                device_id: device.id,
-                wrapped: await wrapRaw(raw, device.public_key, device.id),
-            });
-        }
-
-        try {
-            const { data } = await api.put(`/workspaces/${office.slug}/channels/${channel.slug}/keys`, { wraps });
-            bundle = data;
-        } catch (error) {
-            if (error?.response?.status !== 409) {
-                throw error;
-            }
-            bundle = await bundleFor(office, channel);
-        }
-
+        bundle = await publishWraps(office, channel, await wrapsForDevices(raw, bundle.devices));
         wrap = bundle.wraps.find((item) => item.device_id === me.deviceId);
+
+        if (wrap) {
+            channelKeys.set(channel.id, raw);
+            await rememberBackup(channel, raw).catch(() => {});
+
+            return raw;
+        }
     }
 
     if (!wrap) {
+        try {
+            const recovered = await recoverFromVault(office, channel, me);
+            if (recovered) {
+                channelKeys.set(channel.id, recovered);
+                queueShareMissing(office, channel, recovered, { force: true });
+
+                return recovered;
+            }
+        } catch {
+            /* vault missing or password not unlocked yet */
+        }
+
         return null;
     }
 
     const raw = await unwrapRaw(wrap.wrapped, me);
     channelKeys.set(channel.id, raw);
-    const missing = bundle.devices.filter((device) => !bundle.wraps.some((item) => item.device_id === device.id));
-
-    if (missing.length) {
-        const wraps = [];
-
-        for (const device of missing) {
-            wraps.push({
-                device_id: device.id,
-                wrapped: await wrapRaw(raw, device.public_key, device.id),
-            });
-        }
-
-        await api.put(`/workspaces/${office.slug}/channels/${channel.slug}/keys`, { wraps });
-    }
+    queueShareMissing(office, channel, raw, { force: true });
+    rememberBackup(channel, raw).catch(() => {});
 
     return raw;
+}
+
+export async function syncChannelKeys(office) {
+    if (!office?.slug || !activeUserId) {
+        return;
+    }
+
+    const me = await ensureDevice(activeUserId);
+    if (!me) {
+        return;
+    }
+
+    for (const channel of office.channels || []) {
+        if (!channel?.id || !channel?.slug) {
+            continue;
+        }
+
+        try {
+            await sessionKey(office, channel);
+        } catch {
+            /* keep going; locked channels retry later */
+        }
+    }
+}
+
+export function shareKnownChannelKeys(office) {
+    if (!office?.slug) {
+        return;
+    }
+
+    for (const channel of office.channels || []) {
+        if (!channel?.id || !channelKeys.has(channel.id)) {
+            continue;
+        }
+
+        queueShareMissing(office, channel, channelKeys.get(channel.id));
+    }
 }
 
 export async function sealDocument(office, channel, document) {
     const raw = await sessionKey(office, channel);
 
     if (!raw) {
-        throw new Error('This conversation is still waiting for a key from a teammate who already has it.');
+        throw new Error('This conversation is still waiting for a key from a teammate who already has it. Sign in again on a device that can read the chat, or wait for that device to come online.');
     }
 
     const aes = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);

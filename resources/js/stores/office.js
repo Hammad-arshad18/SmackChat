@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import api from '@/api';
-import { ensureDevice, revealChannels, revealMessage } from '@/e2e';
+import { ensureDevice, revealChannels, revealMessage, shareKnownChannelKeys, syncChannelKeys } from '@/e2e';
 import { bindOffice, realtimeConnected, stopRealtime, subscribeChannel } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
 
@@ -130,6 +130,7 @@ export const useOfficeStore = defineStore('office', {
             if (userId) {
                 try {
                     await ensureDevice(userId);
+                    await syncChannelKeys(this);
                     await revealChannels(this);
                 } catch {
                     /* channel list still loads; sending waits until a device key is ready */
@@ -216,6 +217,7 @@ export const useOfficeStore = defineStore('office', {
             const previousIds = new Set(this.channels.map((c) => c.id));
             const { data } = await api.get(`/workspaces/${this.slug}/channels`);
             this.channels = data.channels;
+            shareKnownChannelKeys(this);
             await revealChannels(this);
 
             if (this.workspace?.id) {
