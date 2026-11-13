@@ -18,7 +18,7 @@
         $appUrl = rtrim(config('app.url'), '/');
         $title = $appName.' — your team\'s day, in one place';
         $description = 'SmackChat brings team chat, attendance, and office schedules together so your crew stays aligned through the day.';
-        $ogImage = $appUrl.'/icons/icon-512.png';
+        $ogImage = $appUrl.'/icons/smack-512.png';
     @endphp
 
     <title>{{ $title }}</title>
@@ -46,8 +46,8 @@
     <link rel="icon" href="/favicon.png" type="image/png" sizes="32x32">
     <link rel="icon" href="/brand/logo-mark-64.png" type="image/png" sizes="64x64">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/icons/smack-apple-touch.png">
+    <link rel="manifest" href="/manifest.webmanifest?v=7">
 
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=bricolage-grotesque:400,500,600,700,800|inter:400,500,600,700" rel="stylesheet">

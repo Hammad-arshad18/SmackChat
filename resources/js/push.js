@@ -120,7 +120,7 @@ export async function showAlert(title, options = {}) {
     const payload = {
         body: options.body || '',
         tag: options.tag || `smack-${Date.now()}`,
-        icon: `${window.location.origin}/icons/icon-192.png`,
+        icon: `${window.location.origin}/icons/smack-192.png`,
         data: options.data || {},
     };
 

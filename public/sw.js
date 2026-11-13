@@ -1,13 +1,13 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v6';
+const CACHE = 'smack-static-v7';
 const PRECACHE = [
     '/offline.html',
     '/favicon.png',
     '/manifest.webmanifest',
     '/brand/logo-mark.png',
-    '/icons/icon-192.png',
-    '/icons/icon-512.png',
-    '/icons/apple-touch-icon.png',
+    '/icons/smack-192.png',
+    '/icons/smack-512.png',
+    '/icons/smack-apple-touch.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -102,7 +102,7 @@ self.addEventListener('message', (event) => {
 function notificationOptions(payload) {
     return {
         body: payload.body || 'New message',
-        icon: new URL('/icons/icon-192.png', self.location.origin).href,
+        icon: new URL('/icons/smack-192.png', self.location.origin).href,
         tag: payload.tag || `smack-${Date.now()}`,
         data: { url: payload.url || '/app' },
     };
