@@ -11,7 +11,14 @@ export function isIos() {
 }
 
 export function isStandalone() {
-    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    return window.matchMedia('(display-mode: standalone)').matches
+        || window.matchMedia('(display-mode: window-controls-overlay)').matches
+        || window.matchMedia('(display-mode: minimal-ui)').matches
+        || window.navigator.standalone === true;
 }
 
 export function needsHomeScreen() {

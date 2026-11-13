@@ -1,5 +1,5 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v8';
+const CACHE = 'smack-static-v9';
 const PRECACHE = [
     '/offline.html',
     '/favicon.png',

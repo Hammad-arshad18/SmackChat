@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import { isStandalone } from '@/push';
 import { useAuthStore } from '@/stores/auth';
 import { applySeo, DEFAULT_DESCRIPTION, DEFAULT_TITLE } from '@/seo';
 
@@ -86,6 +87,11 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
     const auth = useAuthStore();
+
+    // Installed PWAs often keep an old start_url ("/"). Never show marketing there.
+    if (to.path === '/' && isStandalone()) {
+        return '/app';
+    }
 
     if (!auth.ready) {
         await auth.fetchMe();

@@ -47,7 +47,7 @@
     <link rel="icon" href="/brand/logo-mark-64.png" type="image/png" sizes="64x64">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/icons/smack-apple-touch.png">
-    <link rel="manifest" href="/manifest.webmanifest?v=8">
+    <link rel="manifest" href="/manifest.webmanifest?v=9">
 
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=bricolage-grotesque:400,500,600,700,800|inter:400,500,600,700" rel="stylesheet">
@@ -73,6 +73,18 @@
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body>
+    <script>
+        (function () {
+            var standalone = window.matchMedia('(display-mode: standalone)').matches
+                || window.matchMedia('(display-mode: window-controls-overlay)').matches
+                || window.matchMedia('(display-mode: minimal-ui)').matches
+                || window.navigator.standalone === true;
+            if (standalone && window.location.pathname === '/') {
+                window.location.replace('/app');
+            }
+        })();
+    </script>
     <div id="app"></div>
 </body>
 </html>
+

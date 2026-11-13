@@ -7,9 +7,13 @@ import { useAuthStore } from '@/stores/auth';
 const auth = useAuthStore();
 const router = useRouter();
 
-onMounted(() => {
+onMounted(async () => {
+    if (!auth.ready) {
+        await auth.fetchMe();
+    }
+
     const slug = auth.user?.current_workspace?.slug || auth.user?.workspaces?.[0]?.slug;
-    router.replace(slug ? `/w/${slug}` : '/login');
+    await router.replace(slug ? `/w/${slug}` : '/login');
 });
 </script>
 
