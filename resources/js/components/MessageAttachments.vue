@@ -1,7 +1,14 @@
 <script setup>
-import { onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useUiStore } from '@/stores/ui';
-import { attachmentIdFromUrl, fetchAttachmentBlobUrl, releaseAttachmentBlob } from '@/lib/attachments';
+import {
+    attachmentFrameStyle,
+    attachmentIdFromUrl,
+    cachedAttachmentUrl,
+    fetchAttachmentBlobUrl,
+    releaseAttachment,
+    retainAttachment,
+} from '@/lib/attachments';
 
 const props = defineProps({
     items: { type: Array, default: () => [] },
@@ -9,7 +16,10 @@ const props = defineProps({
 });
 
 const ui = useUiStore();
-const sources = ref({});
+const sources = reactive({});
+const loaded = reactive({});
+const failed = reactive({});
+const retained = ref(new Set());
 
 function sizeLabel(bytes) {
     const value = Number(bytes) || 0;
@@ -26,30 +36,92 @@ function iconFor(item) {
     return 'pi pi-file';
 }
 
-function srcFor(item) {
-    const id = attachmentIdFromUrl(item.url);
-
-    return (id && sources.value[id]) || item.url;
+function idFor(item) {
+    return item?.id || attachmentIdFromUrl(item?.url);
 }
 
-async function hydrate(item) {
-    const id = attachmentIdFromUrl(item.url);
-    if (!id || sources.value[id]) {
+function srcFor(item) {
+    const id = idFor(item);
+
+    return (id && sources[id]) || cachedAttachmentUrl(id) || '';
+}
+
+function isReady(item) {
+    const id = idFor(item);
+
+    return Boolean(id && loaded[id] && srcFor(item));
+}
+
+function markLoaded(item) {
+    const id = idFor(item);
+    if (id) {
+        loaded[id] = true;
+    }
+}
+
+function markFailed(item) {
+    const id = idFor(item);
+    if (id) {
+        failed[id] = true;
+    }
+}
+
+async function markImageReady(id, url) {
+    if (!id || !url || loaded[id]) {
         return;
     }
 
-    const url = await fetchAttachmentBlobUrl(id);
-    if (url) {
-        sources.value[id] = url;
+    try {
+        const probe = new Image();
+        probe.src = url;
+        await probe.decode();
+        loaded[id] = true;
+    } catch {
+        /* @load / @error handlers finish this */
     }
 }
 
-function openPreview(item, index) {
+async function hydrate(item) {
+    const id = idFor(item);
+    if (!id) {
+        return;
+    }
+
+    if (!retained.value.has(id)) {
+        retainAttachment(id);
+        retained.value.add(id);
+    }
+
+    if (!sources[id]) {
+        const warm = cachedAttachmentUrl(id);
+        if (warm) {
+            sources[id] = warm;
+        }
+    }
+
+    if (!sources[id]) {
+        const url = await fetchAttachmentBlobUrl(id);
+        if (!url) {
+            failed[id] = true;
+            return;
+        }
+        sources[id] = url;
+    }
+
+    if (item.kind === 'image') {
+        await markImageReady(id, sources[id]);
+    }
+}
+
+function openPreview(item) {
     const previewable = props.items.filter((entry) => ['image', 'video'].includes(entry.kind) || entry.extension === 'pdf');
     const previewIndex = previewable.findIndex((entry) => entry.id === item.id);
 
     if (previewIndex === -1) {
-        window.open(srcFor(item), '_blank', 'noopener,noreferrer');
+        const href = srcFor(item) || item.url;
+        if (href) {
+            window.open(href, '_blank', 'noopener,noreferrer');
+        }
         return;
     }
 
@@ -60,47 +132,75 @@ function openPreview(item, index) {
 }
 
 function openFile(item) {
-    const id = attachmentIdFromUrl(item.url);
-    const href = id && sources.value[id] ? sources.value[id] : item.url;
-    window.open(href, '_blank', 'noopener,noreferrer');
+    const href = srcFor(item) || item.url;
+    if (href) {
+        window.open(href, '_blank', 'noopener,noreferrer');
+    }
 }
 
-watch(() => props.items, (items) => {
-    items.forEach(hydrate);
+const mediaItems = computed(() => props.items || []);
+
+watch(mediaItems, (items) => {
+    items.forEach((item) => {
+        hydrate(item);
+    });
 }, { immediate: true, deep: true });
 
 onBeforeUnmount(() => {
-    props.items.forEach((item) => {
-        const id = attachmentIdFromUrl(item.url);
-        if (id) {
-            releaseAttachmentBlob(id);
-        }
-    });
+    retained.value.forEach((id) => releaseAttachment(id));
+    retained.value = new Set();
 });
 </script>
 
 <template>
     <div v-if="items?.length" class="msg-attachments" :class="{ mine }">
-        <template v-for="(item, index) in items" :key="item.id">
+        <template v-for="(item, index) in items" :key="item.id || `${item.url}-${index}`">
             <button
                 v-if="item.kind === 'image'"
                 type="button"
                 class="msg-attach-image"
+                :class="{ ready: isReady(item), failed: failed[idFor(item)] }"
+                :style="attachmentFrameStyle(item)"
                 :aria-label="`Preview ${item.name}`"
-                @click="openPreview(item, index)"
+                :disabled="!srcFor(item) && !failed[idFor(item)]"
+                @click="openPreview(item)"
             >
-                <img :src="srcFor(item)" :alt="item.name" loading="lazy" />
-                <span class="attach-overlay"><i class="pi pi-search-plus" /></span>
+                <span v-if="!isReady(item)" class="attach-skeleton" aria-hidden="true" />
+                <img
+                    v-if="srcFor(item)"
+                    :src="srcFor(item)"
+                    :alt="item.name"
+                    loading="lazy"
+                    decoding="async"
+                    @load="markLoaded(item)"
+                    @error="markFailed(item)"
+                />
+                <span v-if="isReady(item)" class="attach-overlay"><i class="pi pi-search-plus" /></span>
+                <span v-else-if="failed[idFor(item)]" class="attach-fallback">Could not load image</span>
             </button>
             <button
                 v-else-if="item.kind === 'video'"
                 type="button"
                 class="msg-attach-video"
+                :class="{ ready: isReady(item), failed: failed[idFor(item)] }"
+                :style="attachmentFrameStyle(item)"
                 :aria-label="`Preview ${item.name}`"
-                @click="openPreview(item, index)"
+                :disabled="!srcFor(item) && !failed[idFor(item)]"
+                @click="openPreview(item)"
             >
-                <video :src="srcFor(item)" muted preload="metadata" />
-                <span class="attach-overlay video"><i class="pi pi-play" /></span>
+                <span v-if="!isReady(item)" class="attach-skeleton" aria-hidden="true" />
+                <video
+                    v-if="srcFor(item)"
+                    :src="srcFor(item)"
+                    muted
+                    preload="metadata"
+                    playsinline
+                    @loadedmetadata="markLoaded(item)"
+                    @loadeddata="markLoaded(item)"
+                    @error="markFailed(item)"
+                />
+                <span v-if="isReady(item)" class="attach-overlay video"><i class="pi pi-play" /></span>
+                <span v-else-if="failed[idFor(item)]" class="attach-fallback">Could not load video</span>
             </button>
             <button
                 v-else

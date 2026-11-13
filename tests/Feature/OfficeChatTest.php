@@ -100,9 +100,13 @@ class OfficeChatTest extends TestCase
         $this->assertCount(1, $message['attachments']);
         $this->assertSame('screenshot.png', $message['attachments'][0]['name']);
 
-        $this->actingAs($owner, 'sanctum')
+        $cached = $this->actingAs($owner, 'sanctum')
             ->get($message['attachments'][0]['url'])
             ->assertOk();
+        $cacheControl = strtolower((string) $cached->headers->get('Cache-Control'));
+        $this->assertStringContainsString('private', $cacheControl);
+        $this->assertStringContainsString('max-age=604800', $cacheControl);
+        $this->assertStringContainsString('immutable', $cacheControl);
     }
 
     public function test_only_sender_or_admin_can_delete_a_message(): void

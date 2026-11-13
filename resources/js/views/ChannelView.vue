@@ -21,6 +21,7 @@ import Composer from '@/components/Composer.vue';
 import EmojiPicker from '@/components/EmojiPicker.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import MessageBody from '@/components/MessageBody.vue';
+import { prefetchAttachments } from '@/lib/attachments';
 import { isEmojiOnlyText } from '@/lib/emojis';
 import { reportViewing } from '@/push';
 import { publishTyping, realtimeConnected, watchTyping, whenRealtime } from '@/realtime';
@@ -819,9 +820,18 @@ function canDelete(message) {
 
 async function hydrate(list) {
     const opened = [];
+    const media = [];
 
     for (const message of list || []) {
-        opened.push(await revealMessage(office, message));
+        const next = await revealMessage(office, message);
+        opened.push(next);
+        if (next?.attachments?.length) {
+            media.push(...next.attachments);
+        }
+    }
+
+    if (media.length) {
+        prefetchAttachments(media);
     }
 
     return opened;

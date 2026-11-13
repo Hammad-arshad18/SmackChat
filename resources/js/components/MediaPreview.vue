@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { useUiStore } from '@/stores/ui';
-import { attachmentIdFromUrl, fetchAttachmentBlobUrl } from '@/lib/attachments';
+import { attachmentIdFromUrl, cachedAttachmentUrl, fetchAttachmentBlobUrl } from '@/lib/attachments';
 
 const ui = useUiStore();
 const index = ref(0);
@@ -43,8 +43,15 @@ async function loadCurrent() {
         return;
     }
 
+    const id = attachmentIdFromUrl(item.url) || item.id;
+    const warm = id ? cachedAttachmentUrl(id) : null;
+    if (warm) {
+        src.value = warm;
+        loading.value = false;
+        return;
+    }
+
     loading.value = true;
-    const id = attachmentIdFromUrl(item.url);
     const blob = id ? await fetchAttachmentBlobUrl(id) : null;
     src.value = blob || item.url;
     loading.value = false;

@@ -2761,6 +2761,7 @@ kbd {
     position: relative;
     padding: 16px 22px 26px;
     scroll-behavior: smooth;
+    overflow-anchor: auto;
     background-image: radial-gradient(color-mix(in srgb, var(--line) 55%, transparent) 0.7px, transparent 0.7px);
     background-size: 19px 19px;
 }
@@ -3715,6 +3716,7 @@ kbd {
     display: grid;
     gap: 8px;
     margin-top: 8px;
+    overflow-anchor: none;
 }
 
 .msg-attach-image,
@@ -3729,26 +3731,61 @@ kbd {
     background: var(--surface-2);
     cursor: zoom-in;
     text-align: left;
+    contain: layout paint;
 }
 
 .msg-attach-video {
     cursor: pointer;
 }
 
-.msg-attach-image img {
+.msg-attach-image img,
+.msg-attach-video video {
+    position: absolute;
+    inset: 0;
     display: block;
     width: 100%;
-    max-height: 360px;
+    height: 100%;
     object-fit: cover;
     background: var(--surface-2);
+    opacity: 0;
+    transition: opacity 0.18s ease;
+}
+
+.msg-attach-image.ready img,
+.msg-attach-video.ready video {
+    opacity: 1;
 }
 
 .msg-attach-video video {
-    display: block;
-    width: 100%;
-    max-height: 360px;
     pointer-events: none;
     background: #0b0f14;
+}
+
+.attach-skeleton {
+    position: absolute;
+    inset: 0;
+    background:
+        linear-gradient(110deg, transparent 30%, color-mix(in srgb, var(--surface) 70%, transparent) 50%, transparent 70%),
+        var(--surface-2);
+    background-size: 200% 100%, auto;
+    animation: attach-shimmer 1.2s ease-in-out infinite;
+}
+
+.attach-fallback {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 12px;
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-align: center;
+    background: var(--surface-2);
+}
+
+@keyframes attach-shimmer {
+    0% { background-position: 120% 0, 0 0; }
+    100% { background-position: -40% 0, 0 0; }
 }
 
 .attach-overlay {

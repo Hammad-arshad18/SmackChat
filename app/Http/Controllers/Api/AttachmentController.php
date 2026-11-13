@@ -90,6 +90,14 @@ class AttachmentController extends ApiController
         abort_unless(Storage::disk($attachment->disk)->exists($attachment->path), 404);
 
         $inline = $attachment->kind() !== 'file' || $attachment->mime_type === 'application/pdf';
+        $etag = '"'.sha1($attachment->id.'|'.$attachment->path.'|'.$attachment->updated_at).'"';
+
+        if ($request->headers->get('If-None-Match') === $etag) {
+            return response('', 304, [
+                'ETag' => $etag,
+                'Cache-Control' => 'private, max-age=604800, immutable',
+            ]);
+        }
 
         return Storage::disk($attachment->disk)->response(
             $attachment->path,
@@ -98,6 +106,8 @@ class AttachmentController extends ApiController
                 'Content-Type' => $attachment->mime_type,
                 'Content-Disposition' => ($inline ? 'inline' : 'attachment').'; filename="'.addslashes($attachment->original_name).'"',
                 'X-Content-Type-Options' => 'nosniff',
+                'Cache-Control' => 'private, max-age=604800, immutable',
+                'ETag' => $etag,
             ]
         );
     }

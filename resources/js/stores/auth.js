@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import api, { ensureCsrf } from '@/api';
 import { ensureDevice, forgetEncryption, unlockEncryption } from '@/e2e';
+import { clearAttachmentCache } from '@/lib/attachments';
 import { disablePush } from '@/push';
 
 export const useAuthStore = defineStore('auth', {
@@ -89,6 +90,7 @@ export const useAuthStore = defineStore('auth', {
             await disablePush().catch(() => {});
             await api.post('/logout');
             forgetEncryption();
+            await clearAttachmentCache().catch(() => {});
             this.user = null;
         },
         async adopt(user, password = null) {

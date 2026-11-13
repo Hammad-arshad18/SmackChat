@@ -17,6 +17,7 @@ import {
     writeDraftLocally,
 } from '@/ai';
 import api, { errorText } from '@/api';
+import { warmAttachmentCache } from '@/lib/attachments';
 import { useOfficeStore } from '@/stores/office';
 import EmojiPicker from '@/components/EmojiPicker.vue';
 
@@ -787,6 +788,10 @@ async function uploadFile(file) {
             `/workspaces/${office.slug}/channels/${props.channel}/attachments`,
             form,
         );
+
+        if (data.attachment?.id) {
+            warmAttachmentCache(data.attachment.id, file);
+        }
 
         const index = attachments.value.findIndex((item) => item.localId === localId);
         if (index !== -1) {

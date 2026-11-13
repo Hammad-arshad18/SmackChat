@@ -112,8 +112,18 @@ class WorkspaceController extends ApiController
         $workspace = $this->workspace($request);
         abort_unless($workspace->logo_path && Storage::disk('local')->exists($workspace->logo_path), 404);
 
+        $etag = '"'.sha1($workspace->id.'|'.$workspace->logo_path.'|'.$workspace->updated_at).'"';
+
+        if ($request->headers->get('If-None-Match') === $etag) {
+            return response('', 304, [
+                'ETag' => $etag,
+                'Cache-Control' => 'private, max-age=604800',
+            ]);
+        }
+
         return Storage::disk('local')->response($workspace->logo_path, null, [
-            'Cache-Control' => 'private, max-age=86400',
+            'Cache-Control' => 'private, max-age=604800',
+            'ETag' => $etag,
         ]);
     }
 

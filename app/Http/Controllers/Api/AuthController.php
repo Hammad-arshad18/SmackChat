@@ -240,8 +240,18 @@ class AuthController extends ApiController
         abort_unless($this->sharesWorkspace($request->user(), $user), 403);
         abort_unless($user->avatar_path && Storage::disk('local')->exists($user->avatar_path), 404);
 
+        $etag = '"'.sha1($user->id.'|'.$user->avatar_path.'|'.$user->updated_at).'"';
+
+        if ($request->headers->get('If-None-Match') === $etag) {
+            return response('', 304, [
+                'ETag' => $etag,
+                'Cache-Control' => 'private, max-age=604800',
+            ]);
+        }
+
         return Storage::disk('local')->response($user->avatar_path, null, [
-            'Cache-Control' => 'private, max-age=86400',
+            'Cache-Control' => 'private, max-age=604800',
+            'ETag' => $etag,
         ]);
     }
 

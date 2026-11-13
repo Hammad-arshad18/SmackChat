@@ -20,6 +20,7 @@ const background = computed(() => props.person?.avatar_color || props.color || '
         :label="picture ? undefined : label"
         shape="circle"
         :size="size"
+        :pt="picture ? { image: { loading: 'lazy', decoding: 'async' } } : undefined"
         :style="picture ? undefined : { background, color: '#fff' }"
         :aria-label="person?.name || name || 'Profile photo'"
     />
