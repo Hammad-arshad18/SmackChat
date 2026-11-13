@@ -158,14 +158,19 @@ export const useOfficeStore = defineStore('office', {
 
             this.today = day;
 
-            const floorIndex = this.floorRows.findIndex((row) => row.user_id === day.user_id && row.work_date === day.work_date);
+            // One live floor row per person — replace by user, never append a second copy.
+            const floorIndex = this.floorRows.findIndex((row) => Number(row.user_id) === Number(day.user_id));
             if (floorIndex !== -1) {
                 this.floorRows.splice(floorIndex, 1, { ...this.floorRows[floorIndex], ...day });
+            } else if (day.status === 'open' || day.status === 'on_break') {
+                this.floorRows.push(day);
             }
 
             const monthIndex = this.monthRows.findIndex((row) => row.id === day.id);
             if (monthIndex !== -1) {
                 this.monthRows.splice(monthIndex, 1, { ...this.monthRows[monthIndex], ...day });
+            } else if (day.id) {
+                this.monthRows.push(day);
             }
         },
         async refreshToday() {

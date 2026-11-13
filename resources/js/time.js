@@ -115,6 +115,24 @@ export function isoDate(value = new Date()) {
     return `${date.getFullYear()}-${month}-${day}`;
 }
 
+/** Calendar date (YYYY-MM-DD) in a workspace timezone. */
+export function isoDateInZone(timeZone, value = new Date()) {
+    if (!timeZone) {
+        return isoDate(value);
+    }
+
+    try {
+        return new Intl.DateTimeFormat('en-CA', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        }).format(new Date(value));
+    } catch {
+        return isoDate(value);
+    }
+}
+
 export function currentMonth() {
     return isoDate().slice(0, 7);
 }

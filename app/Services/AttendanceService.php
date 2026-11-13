@@ -10,6 +10,7 @@ use App\Models\Workspace;
 use App\Support\Duration;
 use App\Support\OfficeNetwork;
 use App\Support\RichText;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -24,12 +25,7 @@ class AttendanceService
 
     public function today(Workspace $workspace, User $user): ?AttendanceDay
     {
-        $open = AttendanceDay::query()
-            ->where('workspace_id', $workspace->id)
-            ->where('user_id', $user->id)
-            ->whereIn('status', ['open', 'on_break'])
-            ->latest('work_date')
-            ->first();
+        $open = $this->openDays($workspace, $user)->first();
 
         if ($open) {
             return $open->load('events');
@@ -48,17 +44,21 @@ class AttendanceService
     public function punch(Workspace $workspace, User $user, string $action, ?array $location = null, ?string $clientIp = null): array
     {
         return DB::transaction(function () use ($workspace, $user, $action, $location, $clientIp) {
-            $day = $this->today($workspace, $user);
+            $day = $this->claimDay($workspace, $user);
             $now = now();
 
             if ($action === 'check_in') {
                 $presence = $this->requirePresence($workspace, $location, $clientIp, 'check in');
+                $today = $now->timezone($workspace->timezone)->toDateString();
 
-                if ($day && in_array($day->status, ['open', 'on_break', 'completed'], true) && $day->work_date->toDateString() === $now->timezone($workspace->timezone)->toDateString()) {
+                // Same account on a second device: reuse today's open shift instead of creating another.
+                if ($day && in_array($day->status, ['open', 'on_break'], true) && $day->work_date->toDateString() === $today) {
+                    return ['day' => $day->load('events'), 'message' => null];
+                }
+
+                if ($day && $day->status === 'completed' && $day->work_date->toDateString() === $today) {
                     throw ValidationException::withMessages([
-                        'action' => $day->status === 'completed'
-                            ? 'You already finished today\'s shift.'
-                            : 'You are already checked in.',
+                        'action' => 'You already finished today\'s shift.',
                     ]);
                 }
 
@@ -69,19 +69,37 @@ class AttendanceService
                 }
 
                 $context = $this->inspector->describe($workspace, $now);
-                $day = AttendanceDay::query()->create([
-                    'workspace_id' => $workspace->id,
-                    'user_id' => $user->id,
-                    'work_date' => $context['date'],
-                    'check_in_at' => $now,
-                    'check_in_latitude' => $presence['latitude'] ?? null,
-                    'check_in_longitude' => $presence['longitude'] ?? null,
-                    'check_in_ip' => $presence['ip'] ?? $this->safeIp($clientIp),
-                    'status' => 'open',
-                    'outside_hours' => $context['outside_hours'],
-                    'non_working_day' => $context['non_working_day'],
-                    'holiday_name' => $context['holiday'],
-                ]);
+
+                try {
+                    $day = AttendanceDay::query()->create([
+                        'workspace_id' => $workspace->id,
+                        'user_id' => $user->id,
+                        'work_date' => $context['date'],
+                        'check_in_at' => $now,
+                        'check_in_latitude' => $presence['latitude'] ?? null,
+                        'check_in_longitude' => $presence['longitude'] ?? null,
+                        'check_in_ip' => $presence['ip'] ?? $this->safeIp($clientIp),
+                        'status' => 'open',
+                        'outside_hours' => $context['outside_hours'],
+                        'non_working_day' => $context['non_working_day'],
+                        'holiday_name' => $context['holiday'],
+                    ]);
+                } catch (QueryException $exception) {
+                    if (! $this->isUniqueConstraint($exception)) {
+                        throw $exception;
+                    }
+
+                    // Lost a create race with another device; attach to the row that won.
+                    $day = $this->claimDay($workspace, $user);
+                    if ($day && in_array($day->status, ['open', 'on_break'], true)) {
+                        return ['day' => $day->load('events'), 'message' => null];
+                    }
+
+                    throw ValidationException::withMessages([
+                        'action' => 'You are already checked in.',
+                    ]);
+                }
+
                 $this->event($day, 'check_in', $now);
 
                 return ['day' => $day->load('events'), 'message' => null];
@@ -322,6 +340,78 @@ class AttendanceService
             'type' => $type,
             'happened_at' => $at,
         ]);
+    }
+
+    /**
+     * Lock open shifts for this person, keep the newest, and close any duplicates.
+     * Stops a race (or bad data) from leaving the same user "live" twice.
+     */
+    private function claimDay(Workspace $workspace, User $user): ?AttendanceDay
+    {
+        $opens = $this->openDays($workspace, $user)->lockForUpdate()->get();
+        $keep = $opens->shift();
+
+        foreach ($opens as $stale) {
+            $this->abandonStaleOpen($stale);
+        }
+
+        if ($keep) {
+            return $keep->load('events');
+        }
+
+        $date = now()->timezone($workspace->timezone)->toDateString();
+
+        return AttendanceDay::query()
+            ->with('events')
+            ->where('workspace_id', $workspace->id)
+            ->where('user_id', $user->id)
+            ->whereDate('work_date', $date)
+            ->lockForUpdate()
+            ->first();
+    }
+
+    private function openDays(Workspace $workspace, User $user)
+    {
+        return AttendanceDay::query()
+            ->where('workspace_id', $workspace->id)
+            ->where('user_id', $user->id)
+            ->whereIn('status', ['open', 'on_break'])
+            ->orderByDesc('work_date')
+            ->orderByDesc('id');
+    }
+
+    private function abandonStaleOpen(AttendanceDay $day): void
+    {
+        $day->loadMissing('workspace');
+        $timezone = $day->workspace?->timezone ?? (string) config('app.timezone');
+        $end = Carbon::parse($day->work_date->toDateString().' 23:59:59', $timezone);
+
+        if ($end->greaterThan(now())) {
+            $end = now();
+        }
+
+        $events = $day->events()->get();
+        if (! $events->contains(fn (AttendanceEvent $event) => $event->type === 'check_out')) {
+            $this->event($day, 'check_out', $end);
+            $events = $day->events()->get();
+        }
+
+        $totals = $this->calculator->summarize($events, $end);
+        $day->update([
+            'check_out_at' => $end,
+            'status' => 'completed',
+            'work_minutes' => $totals['work_minutes'],
+            'break_minutes' => $totals['break_minutes'],
+        ]);
+    }
+
+    private function isUniqueConstraint(QueryException $exception): bool
+    {
+        $sqlState = $exception->errorInfo[0] ?? '';
+        $driverCode = (int) ($exception->errorInfo[1] ?? 0);
+
+        // SQLSTATE 23000 + MySQL 1062, or SQLite "UNIQUE constraint failed".
+        return $sqlState === '23000' || $driverCode === 1062 || str_contains($exception->getMessage(), 'UNIQUE constraint failed');
     }
 
     private function postTimesheet(Workspace $workspace, User $user, AttendanceDay $day): ?array

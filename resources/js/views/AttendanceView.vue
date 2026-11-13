@@ -12,6 +12,7 @@ import {
     formatFullDay,
     formatMonth,
     isoDate,
+    isoDateInZone,
     minutesLabel,
     shiftMonth,
 } from '@/time';
@@ -72,7 +73,34 @@ const overtimeMinutes = computed(() => scopeRows.value.reduce((total, row) => to
 const breakMinutes = computed(() => scopeRows.value.reduce((total, row) => total + (row.break_minutes || 0), 0));
 const daysWorked = computed(() => new Set(scopeRows.value.filter((row) => row.work_minutes > 0 || row.status !== 'idle').map((row) => row.work_date)).size);
 const avgMinutes = computed(() => (completedRows.value.length ? Math.round(completedRows.value.reduce((total, row) => total + row.work_minutes, 0) / completedRows.value.length) : 0));
-const openToday = computed(() => rows.value.filter((row) => row.status === 'open' || row.status === 'on_break'));
+const floorToday = computed(() => isoDateInZone(office.workspace?.timezone));
+const openToday = computed(() => {
+    const today = floorToday.value;
+    const live = rows.value.filter((row) => (
+        (row.status === 'open' || row.status === 'on_break')
+        && row.work_date === today
+    ));
+    const byUser = new Map();
+
+    live.forEach((row) => {
+        const previous = byUser.get(row.user_id);
+        if (!previous || new Date(row.check_in_at) > new Date(previous.check_in_at)) {
+            byUser.set(row.user_id, row);
+        }
+    });
+
+    return [...byUser.values()];
+});
+const liveNameCounts = computed(() => {
+    const counts = new Map();
+    openToday.value.forEach((row) => {
+        const key = (row.user_name || '').trim().toLowerCase();
+        counts.set(key, (counts.get(key) || 0) + 1);
+    });
+
+    return counts;
+});
+const liveNeedsEmail = (row) => (liveNameCounts.value.get((row.user_name || '').trim().toLowerCase()) || 0) > 1;
 
 const teamSummary = computed(() => {
     const map = new Map();
@@ -190,6 +218,10 @@ async function download() {
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Export', detail: errorText(error), life: 3000 });
     }
+}
+
+function memberFor(userId) {
+    return office.members.find((person) => Number(person.id) === Number(userId)) || null;
 }
 
 function statusSeverity(status) {
@@ -348,13 +380,17 @@ function inspectRow(row) {
                                 <Tag :value="manager ? 'Team' : 'You'" severity="secondary" />
                             </header>
                             <div v-if="openToday.length" class="live-list">
-                                <div v-for="row in openToday" :key="row.id" class="live-row">
+                                <div v-for="row in openToday" :key="row.user_id" class="live-row">
                                     <span class="presence-avatar online">
-                                        <PersonAvatar :person="office.members.find((person) => person.id === row.user_id)" :name="row.user_name" />
+                                        <PersonAvatar :person="memberFor(row.user_id)" :name="row.user_name" />
                                     </span>
                                     <span>
                                         <strong>{{ row.user_name }}</strong>
-                                        <small>{{ row.status === 'on_break' ? 'On a break' : 'Working now' }} · in at {{ formatClock(row.check_in_at) }}</small>
+                                        <small>
+                                            {{ row.status === 'on_break' ? 'On a break' : 'Working now' }}
+                                            · in at {{ formatClock(row.check_in_at) }}
+                                            <template v-if="liveNeedsEmail(row) && row.user_email"> · {{ row.user_email }}</template>
+                                        </small>
                                     </span>
                                     <Tag :value="row.status === 'on_break' ? 'Break' : 'Live'" :severity="row.status === 'on_break' ? 'warn' : 'success'" />
                                 </div>

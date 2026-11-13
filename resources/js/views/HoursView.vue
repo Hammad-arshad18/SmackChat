@@ -84,7 +84,19 @@ const nextHoliday = computed(() => {
         .filter((item) => item.date >= todayDate)
         .sort((a, b) => a.date - b.date)[0] || null;
 });
-const liveRows = computed(() => office.floorRows.filter((row) => row.status === 'open' || row.status === 'on_break'));
+const liveRows = computed(() => {
+    const live = office.floorRows.filter((row) => row.status === 'open' || row.status === 'on_break');
+    const byUser = new Map();
+
+    live.forEach((row) => {
+        const previous = byUser.get(row.user_id);
+        if (!previous || new Date(row.check_in_at) > new Date(previous.check_in_at)) {
+            byUser.set(row.user_id, row);
+        }
+    });
+
+    return [...byUser.values()];
+});
 const canEdit = computed(() => office.manages);
 
 onMounted(load);

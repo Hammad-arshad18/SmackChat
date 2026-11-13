@@ -372,6 +372,92 @@ class OfficeChatTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_a_second_device_check_in_reuses_today_open_shift(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-13 08:57:00', $workspace->timezone)->utc());
+        $first = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
+            ->assertOk()
+            ->json('day');
+
+        Carbon::setTestNow(Carbon::parse('2026-11-13 14:22:00', $workspace->timezone)->utc());
+        $second = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
+            ->assertOk()
+            ->json('day');
+
+        $this->assertSame($first['id'], $second['id']);
+        $this->assertSame('open', $second['status']);
+        $this->assertSame(
+            1,
+            AttendanceDay::query()
+                ->where('workspace_id', $workspace->id)
+                ->where('user_id', $owner->id)
+                ->whereIn('status', ['open', 'on_break'])
+                ->count()
+        );
+
+        Carbon::setTestNow();
+    }
+
+    public function test_duplicate_open_shifts_are_collapsed_on_the_next_punch(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-12 08:57:00', $workspace->timezone)->utc());
+        $stale = AttendanceDay::query()->create([
+            'workspace_id' => $workspace->id,
+            'user_id' => $owner->id,
+            'work_date' => '2026-11-12',
+            'check_in_at' => now(),
+            'status' => 'open',
+            'outside_hours' => false,
+            'non_working_day' => false,
+        ]);
+        $stale->events()->create([
+            'type' => 'check_in',
+            'happened_at' => now(),
+        ]);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-13 14:22:00', $workspace->timezone)->utc());
+        $current = AttendanceDay::query()->create([
+            'workspace_id' => $workspace->id,
+            'user_id' => $owner->id,
+            'work_date' => '2026-11-13',
+            'check_in_at' => now(),
+            'status' => 'open',
+            'outside_hours' => true,
+            'non_working_day' => false,
+        ]);
+        $current->events()->create([
+            'type' => 'check_in',
+            'happened_at' => now(),
+        ]);
+
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_in'])
+            ->assertOk()
+            ->assertJsonPath('day.id', $current->id)
+            ->assertJsonPath('day.status', 'on_break');
+
+        $this->assertSame('completed', $stale->fresh()->status);
+        $this->assertSame('on_break', $current->fresh()->status);
+        $this->assertSame(
+            1,
+            AttendanceDay::query()
+                ->where('workspace_id', $workspace->id)
+                ->where('user_id', $owner->id)
+                ->whereIn('status', ['open', 'on_break'])
+                ->count()
+        );
+
+        Carbon::setTestNow();
+    }
+
     public function test_checkout_calculates_the_day_and_posts_it_for_the_owner(): void
     {
         $owner = $this->openOffice();
