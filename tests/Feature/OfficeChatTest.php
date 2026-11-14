@@ -403,6 +403,40 @@ class OfficeChatTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_check_in_stores_the_real_instant_so_the_shift_counter_runs(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $workspace->forceFill([
+            'timezone' => 'Asia/Dubai',
+            'work_start' => '09:00:00',
+            'work_end' => '18:00:00',
+            'work_days' => [1, 2, 3, 4, 5, 6],
+        ])->save();
+
+        Carbon::setTestNow(Carbon::parse('2026-11-16 09:00:00', 'Asia/Dubai')->utc());
+        $day = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
+            ->assertOk()
+            ->json('day');
+
+        // The office clock is 09:00 in Dubai, which is 05:00 UTC. Storing the
+        // Dubai wall clock instead would put the check-in four hours in the
+        // future and freeze the live counter at 00:00:00.
+        $this->assertSame('2026-11-16T05:00:00+00:00', $day['check_in_at']);
+        $this->assertSame('2026-11-16T05:00:00+00:00', $day['events'][0]['happened_at']);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-16 10:00:00', 'Asia/Dubai')->utc());
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/attendance/today")
+            ->assertOk()
+            ->assertJsonPath('day.status', 'open')
+            ->assertJsonPath('day.work_minutes', 60)
+            ->assertJsonPath('day.counted_minutes', 60);
+
+        Carbon::setTestNow();
+    }
+
     public function test_duplicate_open_shifts_are_collapsed_on_the_next_punch(): void
     {
         $owner = $this->openOffice();

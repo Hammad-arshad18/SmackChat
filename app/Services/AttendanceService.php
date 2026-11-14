@@ -49,7 +49,8 @@ class AttendanceService
 
             if ($action === 'check_in') {
                 $presence = $this->requirePresence($workspace, $location, $clientIp, 'check in');
-                $today = $now->timezone($workspace->timezone)->toDateString();
+                // Copy: Carbon::timezone() mutates. $now is persisted below and must stay in app time.
+                $today = $now->copy()->timezone($workspace->timezone)->toDateString();
 
                 // Same account on a second device: reuse today's open shift instead of creating another.
                 if ($day && in_array($day->status, ['open', 'on_break'], true) && $day->work_date->toDateString() === $today) {
@@ -384,7 +385,9 @@ class AttendanceService
     {
         $day->loadMissing('workspace');
         $timezone = $day->workspace?->timezone ?? (string) config('app.timezone');
-        $end = Carbon::parse($day->work_date->toDateString().' 23:59:59', $timezone);
+        // End of that work day in the office clock, then back to app time for storage.
+        $end = Carbon::parse($day->work_date->toDateString().' 23:59:59', $timezone)
+            ->setTimezone(config('app.timezone'));
 
         if ($end->greaterThan(now())) {
             $end = now();
