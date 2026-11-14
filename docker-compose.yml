@@ -1,8 +1,36 @@
 services:
+  app:
+    build: .
+    ports:
+      - "8001:8000"
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: http://localhost:8001
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_DATABASE: smackchat
+      DB_USERNAME: smackchat
+      DB_PASSWORD: secret
+      SESSION_DRIVER: database
+      CACHE_STORE: database
+      QUEUE_CONNECTION: database
+      SANCTUM_STATEFUL_DOMAINS: localhost,localhost:8001,127.0.0.1,127.0.0.1:8001
+    volumes:
+      - .:/var/www/html
+      - ./docker/entrypoint.sh:/usr/local/bin/smackchat-entrypoint:ro
+      - smackchat-vendor:/var/www/html/vendor
+      - smackchat-node_modules:/var/www/html/node_modules
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
   mysql:
     image: mysql:8.4
     ports:
-      - "3306:3306"
+      - "3307:3306"
     environment:
       MYSQL_DATABASE: smackchat
       MYSQL_USER: smackchat
@@ -18,3 +46,5 @@ services:
 
 volumes:
   smackchat-mysql:
+  smackchat-vendor:
+  smackchat-node_modules: 
