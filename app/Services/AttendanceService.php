@@ -165,7 +165,7 @@ class AttendanceService
         $totals = $this->totalsFor($day);
         $counted = $totals['work_minutes'];
         $break = $totals['break_minutes'];
-        $portions = $this->calculator->portions($counted, $standard);
+        $portions = $this->calculator->portions($counted, $standard, $this->offDay($day));
 
         return [
             'id' => $day->id,
@@ -417,6 +417,11 @@ class AttendanceService
         return $sqlState === '23000' || $driverCode === 1062 || str_contains($exception->getMessage(), 'UNIQUE constraint failed');
     }
 
+    private function offDay(AttendanceDay $day): bool
+    {
+        return $day->non_working_day || filled($day->holiday_name);
+    }
+
     private function postTimesheet(Workspace $workspace, User $user, AttendanceDay $day): ?array
     {
         $channel = Channel::query()
@@ -437,9 +442,14 @@ class AttendanceService
             'Worked '.Duration::label($day->work_minutes).' with '.Duration::label($day->break_minutes).' of breaks.',
         ];
 
-        $overtime = $this->calculator->portions((int) $day->work_minutes, $standard)['overtime_minutes'];
+        $offDay = $this->offDay($day);
+        $overtime = $this->calculator->portions((int) $day->work_minutes, $standard, $offDay)['overtime_minutes'];
         if ($overtime > 0) {
-            $lines[] = Duration::label($overtime).' of that is overtime, past a '.Duration::label($standard).' day. Breaks are not counted.';
+            if ($offDay) {
+                $lines[] = Duration::label($overtime).' of that is overtime on an off day. Breaks are not counted.';
+            } else {
+                $lines[] = Duration::label($overtime).' of that is overtime, past a '.Duration::label($standard).' day. Breaks are not counted.';
+            }
         }
 
         if ($day->holiday_name) {

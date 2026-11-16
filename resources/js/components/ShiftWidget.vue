@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useToast } from 'primevue/usetoast';
 import { errorText } from '@/api';
 import { useOfficeStore } from '@/stores/office';
-import { formatClock, minutesLabel, shiftTotals, durationClock, wallClockLabel } from '@/time';
+import { formatClock, isAttendanceOffDay, minutesLabel, shiftTotals, durationClock, wallClockLabel, workPortions } from '@/time';
 
 const props = defineProps({
     variant: { type: String, default: 'compact' },
@@ -31,7 +31,12 @@ const workedMinutes = computed(() => {
 
     return Math.floor(totals.value.workSeconds / 60);
 });
-const overtimeMinutes = computed(() => Math.max(0, workedMinutes.value - standardMinutes.value));
+const offDay = computed(() => isAttendanceOffDay(office.today));
+const overtimeMinutes = computed(() => workPortions(
+    workedMinutes.value,
+    standardMinutes.value,
+    offDay.value,
+).overtime_minutes);
 const progress = computed(() => Math.min(100, Math.round((workedMinutes.value / standardMinutes.value) * 100)));
 const dayPlan = computed(() => {
     const hours = office.workspace
