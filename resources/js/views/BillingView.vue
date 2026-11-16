@@ -18,7 +18,7 @@ const standardFeatures = computed(() => [
     `${office.workspace.retention_days} days of message history`,
     'Channels, threads, and direct messages',
     'The floor clock and daily timesheets',
-    'Attendance ledger and CSV export',
+    'Attendance ledger and Excel export',
     'People directory and invitations',
 ]);
 const archiveFeatures = computed(() => [

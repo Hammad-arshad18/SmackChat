@@ -37,7 +37,11 @@ class ScheduleInspector
 
     public function holidayOn(Workspace $workspace, CarbonInterface $local): ?Holiday
     {
-        return $workspace->holidays()->get()->first(function (Holiday $holiday) use ($local) {
+        $holidays = $workspace->relationLoaded('holidays')
+            ? $workspace->holidays
+            : $workspace->holidays()->get();
+
+        return $holidays->first(function (Holiday $holiday) use ($local) {
             $observed = $holiday->observed_on->copy();
 
             if ($holiday->repeats_yearly) {
@@ -46,6 +50,28 @@ class ScheduleInspector
 
             return $observed->toDateString() === $local->toDateString();
         });
+    }
+
+    /**
+     * Office days in the range: on the working week, and not a holiday.
+     */
+    public function workingDays(Workspace $workspace, CarbonInterface $start, CarbonInterface $end): int
+    {
+        $workspace->loadMissing('holidays');
+        $days = collect($workspace->work_days ?? [])->map(fn ($day) => (int) $day)->all();
+        $cursor = Carbon::parse($start->toDateString())->startOfDay();
+        $last = Carbon::parse($end->toDateString())->startOfDay();
+        $count = 0;
+
+        while ($cursor->lte($last)) {
+            if (in_array($cursor->dayOfWeekIso, $days, true) && $this->holidayOn($workspace, $cursor) === null) {
+                $count++;
+            }
+
+            $cursor->addDay();
+        }
+
+        return $count;
     }
 
     public function clock(string $value): string

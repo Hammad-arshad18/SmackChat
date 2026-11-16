@@ -113,7 +113,7 @@ function demo(email) {
                 <div class="auth-features">
                     <div><i class="pi pi-comments" /><span><strong>Rooms that stay tidy</strong><small>Channels, threads, rich messages, and search.</small></span></div>
                     <div><i class="pi pi-stopwatch" /><span><strong>The floor clock</strong><small>Check in, take breaks, and file the day automatically.</small></span></div>
-                    <div><i class="pi pi-chart-line" /><span><strong>Attendance you can read</strong><small>Live presence, monthly heatmaps, and CSV exports.</small></span></div>
+                    <div><i class="pi pi-chart-line" /><span><strong>Attendance you can read</strong><small>Live presence, monthly heatmaps, and Excel exports.</small></span></div>
                 </div>
             </div>
 

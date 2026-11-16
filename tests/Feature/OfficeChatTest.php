@@ -18,7 +18,9 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Testing\TestResponse;
 use Minishlink\WebPush\VAPID;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -960,11 +962,17 @@ class OfficeChatTest extends TestCase
             ->json('messages.0.text');
         $this->assertStringContainsString('4h of that is overtime on an off day', (string) $timesheet);
 
-        $saturday = $this->actingAs($owner, 'sanctum')
-            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11")
-            ->assertOk()
-            ->streamedContent();
-        $this->assertStringContainsString('4.00,0.00,4.00,0.00', $saturday);
+        $sheets = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+        $saturday = $this->attendanceLine($sheets['Attendance'], 'ada@northwind.test', '2026-11-07');
+        $this->assertEqualsWithDelta(4.0, $saturday[6], 0.001);
+        $this->assertEqualsWithDelta(0.0, $saturday[7], 0.001);
+        $this->assertEqualsWithDelta(4.0, $saturday[8], 0.001);
+        $this->assertEqualsWithDelta(0.0, $saturday[9], 0.001);
+        $summary = $this->summaryLine($sheets['Summary'], 'ada@northwind.test');
+        $this->assertEqualsWithDelta(168.0, $summary[2], 0.001);
+        $this->assertEqualsWithDelta(4.0, $summary[3], 0.001);
+        $this->assertEqualsWithDelta(-164.0, $summary[4], 0.001);
 
         $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
             'name' => 'Founders day',
@@ -1008,13 +1016,78 @@ class OfficeChatTest extends TestCase
 
         Carbon::setTestNow();
 
-        $export = $this->actingAs($owner, 'sanctum')
-            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11")
-            ->assertOk()
-            ->streamedContent();
+        $sheets = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+        $this->assertSame('Overtime', $sheets['Attendance'][0][8]);
+        $day = $this->attendanceLine($sheets['Attendance'], 'ada@northwind.test', '2026-11-05');
+        $this->assertEqualsWithDelta(8.75, $day[6], 0.001);
+        $this->assertEqualsWithDelta(8.0, $day[7], 0.001);
+        $this->assertEqualsWithDelta(0.75, $day[8], 0.001);
+        $this->assertEqualsWithDelta(0.5, $day[9], 0.001);
+    }
 
-        $this->assertStringContainsString('Overtime', $export);
-        $this->assertStringContainsString('0.75', $export);
+    public function test_export_includes_an_open_shift_with_no_checkout(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-16 04:57:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
+            ->assertOk()
+            ->assertJsonPath('day.status', 'open')
+            ->assertJsonPath('day.check_out_at', null);
+
+        $sheets = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+        $open = $this->attendanceLine($sheets['Attendance'], 'ada@northwind.test', '2026-11-16');
+        $this->assertSame('2026-11-16 04:57', $open[4]);
+        $this->assertNull($open[5]);
+        $this->assertSame('open', $open[10]);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_export_summary_compares_expected_hours_with_hours_worked(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+        $teammate = User::factory()->create([
+            'name' => 'Grace Hopper',
+            'email' => 'grace@northwind.test',
+        ]);
+        app(WorkspaceProvisioner::class)->admit($workspace, $teammate, 'member');
+
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Founders day',
+            'observed_on' => '2026-11-05',
+        ])->assertCreated();
+
+        Carbon::setTestNow(Carbon::parse('2026-11-04 09:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-04 11:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])->assertOk();
+        Carbon::setTestNow();
+
+        $sheets = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+
+        $this->assertSame(['Attendance', 'Summary'], array_keys($sheets));
+        $this->assertSame('Expected hours each', $sheets['Summary'][4][0]);
+        $this->assertEqualsWithDelta(160.0, $sheets['Summary'][4][1], 0.001);
+        $this->assertSame(20, $sheets['Summary'][3][1]);
+
+        $ada = $this->summaryLine($sheets['Summary'], 'ada@northwind.test');
+        $grace = $this->summaryLine($sheets['Summary'], 'grace@northwind.test');
+        $this->assertEqualsWithDelta(160.0, $ada[2], 0.001);
+        $this->assertEqualsWithDelta(2.0, $ada[3], 0.001);
+        $this->assertEqualsWithDelta(-158.0, $ada[4], 0.001);
+        $this->assertEqualsWithDelta(160.0, $grace[2], 0.001);
+        $this->assertEqualsWithDelta(0.0, $grace[3], 0.001);
+
+        $total = collect($sheets['Summary'])->first(fn (array $row) => ($row[0] ?? null) === 'Total');
+        $this->assertEqualsWithDelta(320.0, $total[2], 0.001);
+        $this->assertEqualsWithDelta(2.0, $total[3], 0.001);
     }
 
     public function test_break_allowance_sets_the_expected_work_day(): void
@@ -1247,6 +1320,60 @@ class OfficeChatTest extends TestCase
         $this->actingAs($user, 'sanctum');
 
         return $this->parties[$user->id];
+    }
+
+    /**
+     * @return array<string, list<list<mixed>>>
+     */
+    private function workbook(TestResponse $response): array
+    {
+        $response->assertOk();
+        $this->assertStringContainsString('.xlsx', (string) $response->headers->get('content-disposition'));
+
+        $path = tempnam(sys_get_temp_dir(), 'attendance');
+        file_put_contents($path, $response->streamedContent());
+        $spreadsheet = IOFactory::load($path);
+        if (is_file($path)) {
+            unlink($path);
+        }
+
+        $sheets = [];
+        foreach ($spreadsheet->getWorksheetIterator() as $sheet) {
+            $sheets[$sheet->getTitle()] = $sheet->toArray(null, true, false, false);
+        }
+        $spreadsheet->disconnectWorksheets();
+
+        return $sheets;
+    }
+
+    /**
+     * @param  list<list<mixed>>  $rows
+     * @return list<mixed>
+     */
+    private function attendanceLine(array $rows, string $email, string $date): array
+    {
+        foreach ($rows as $row) {
+            if (($row[1] ?? null) === $email && ($row[2] ?? null) === $date) {
+                return $row;
+            }
+        }
+
+        $this->fail("Missing attendance row for {$email} on {$date}.");
+    }
+
+    /**
+     * @param  list<list<mixed>>  $rows
+     * @return list<mixed>
+     */
+    private function summaryLine(array $rows, string $email): array
+    {
+        foreach ($rows as $row) {
+            if (($row[1] ?? null) === $email) {
+                return $row;
+            }
+        }
+
+        $this->fail("Missing summary row for {$email}.");
     }
 
     private function openOffice(): User
