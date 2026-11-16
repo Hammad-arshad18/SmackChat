@@ -212,7 +212,7 @@ async function download() {
         const url = URL.createObjectURL(response.data);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `attendance-${office.slug}-${month.value}.csv`;
+        link.download = `attendance-${office.slug}-${month.value}.xlsx`;
         link.click();
         URL.revokeObjectURL(url);
     } catch (error) {
@@ -278,7 +278,7 @@ function inspectRow(row) {
                     <button type="button" class="month-label" @click="thisMonth">{{ formatMonth(month) }}</button>
                     <Button icon="pi pi-chevron-right" text rounded aria-label="Next month" @click="moveMonth(1)" />
                 </div>
-                <Button v-if="manager" label="Export CSV" icon="pi pi-download" severity="secondary" outlined @click="download" />
+                <Button v-if="manager" label="Export Excel" icon="pi pi-download" severity="secondary" outlined @click="download" />
             </div>
         </header>
 

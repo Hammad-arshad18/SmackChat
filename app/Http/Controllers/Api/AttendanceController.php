@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\AttendanceDay;
 use App\Services\AblyPublisher;
 use App\Services\AttendanceService;
+use App\Services\AttendanceWorkbook;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
@@ -84,44 +85,20 @@ class AttendanceController extends ApiController
         ]);
     }
 
-    public function export(Request $request, AttendanceService $attendance)
+    public function export(Request $request, AttendanceWorkbook $workbook)
     {
         $this->requireManager($request);
         [$start, $end] = $this->range($request);
         $workspace = $this->workspace($request);
         $rows = $this->query($request, $start, $end)->get();
-        $filename = 'attendance-'.$workspace->slug.'-'.$start->format('Y-m').'.csv';
+        $filename = 'attendance-'.$workspace->slug.'-'.$start->format('Y-m').'.xlsx';
+        $bytes = $workbook->render($workspace, $start, $end, $rows);
 
-        return response()->streamDownload(function () use ($rows, $workspace, $attendance) {
-            $out = fopen('php://output', 'w');
-            fputcsv($out, ['Employee', 'Email', 'Date', 'Weekday', 'Check in', 'Check out', 'Worked', 'Regular', 'Overtime', 'Breaks', 'Status', 'Notes']);
-
-            foreach ($rows as $day) {
-                $presented = $attendance->presentDay($day);
-                $notes = collect([
-                    $day->holiday_name ? 'Holiday: '.$day->holiday_name : null,
-                    $day->non_working_day ? 'Outside the working week' : null,
-                    $day->outside_hours ? 'Outside scheduled hours' : null,
-                ])->filter()->implode('; ');
-
-                fputcsv($out, [
-                    $day->user?->name,
-                    $day->user?->email,
-                    $day->work_date->toDateString(),
-                    $day->work_date->copy()->timezone($workspace->timezone)->format('l'),
-                    optional($day->check_in_at)?->copy()->timezone($workspace->timezone)->format('Y-m-d H:i'),
-                    optional($day->check_out_at)?->copy()->timezone($workspace->timezone)->format('Y-m-d H:i'),
-                    $this->hours($presented['counted_minutes']),
-                    $this->hours($presented['regular_minutes']),
-                    $this->hours($presented['overtime_minutes']),
-                    $this->hours($presented['break_minutes']),
-                    $day->status,
-                    $notes,
-                ]);
-            }
-
-            fclose($out);
-        }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
+        return response()->streamDownload(function () use ($bytes) {
+            echo $bytes;
+        }, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ]);
     }
 
     private function query(Request $request, Carbon $start, Carbon $end)
@@ -149,10 +126,5 @@ class AttendanceController extends ApiController
         $start = Carbon::createFromFormat('Y-m-d', $month.'-01')->startOfMonth();
 
         return [$start, $start->copy()->endOfMonth()];
-    }
-
-    private function hours(int $minutes): string
-    {
-        return number_format($minutes / 60, 2, '.', '');
     }
 }

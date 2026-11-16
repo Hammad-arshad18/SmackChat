@@ -32,7 +32,7 @@ const jobs = [
     'Open a private room',
     'Start a thread',
     'Review attendance',
-    'Export CSV',
+    'Export Excel',
     'Invite the team',
     'Keep history forever',
 ];
@@ -75,12 +75,12 @@ const features = {
     track: {
         eyebrow: 'Track',
         title: 'Attendance leaders can actually read',
-        body: 'Owners and admins get monthly heatmaps, overtime past a standard day, schedules, holidays, and CSV export. The record lives next to the conversation that created it.',
+        body: 'Owners and admins get monthly heatmaps, overtime past a standard day, schedules, holidays, and Excel export. The record lives next to the conversation that created it.',
         points: [
             'Monthly attendance heatmaps',
             'Overtime past the standard day',
             'Schedules and repeating holidays',
-            'CSV export when payroll asks',
+            'Excel export when payroll asks',
             'Today view for unread, shift, and presence',
             'Roles: owner runs billing; admins help run the floor',
         ],
@@ -141,7 +141,7 @@ const detailBlocks = [
     },
     {
         title: 'Timesheets without a second app',
-        body: 'Checkout writes the day into #timesheets. Attendance heatmaps, overtime, and CSV export stay with owners and admins.',
+        body: 'Checkout writes the day into #timesheets. Attendance heatmaps, overtime, and Excel export stay with owners and admins.',
     },
     {
         title: 'History you can explain',
@@ -168,7 +168,7 @@ const faqs = [
     },
     {
         q: 'Who can see attendance?',
-        a: 'Everyone uses the floor clock. Owners and admins read the attendance ledger, heatmaps, schedules, holidays, and CSV export.',
+        a: 'Everyone uses the floor clock. Owners and admins read the attendance ledger, heatmaps, schedules, holidays, and Excel export.',
     },
     {
         q: 'What happens when I register?',
@@ -497,7 +497,7 @@ function toggleTheme() {
                             <li>Encrypted channels, threads, and DMs</li>
                             <li>Rich composer, reactions, and search</li>
                             <li>Floor clock and Timesheets</li>
-                            <li>Attendance heatmaps and CSV</li>
+                            <li>Attendance heatmaps and Excel</li>
                             <li>Invites, roles, push, and PWA</li>
                         </ul>
                         <RouterLink :to="primaryTo" class="mk-btn ghost dark">{{ primaryLabel }}</RouterLink>
