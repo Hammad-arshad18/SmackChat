@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Ably\PubSub\Server;
+use App\Models\Channel;
 use App\Models\User;
 use App\Models\Workspace;
 use Throwable;
@@ -68,14 +69,7 @@ class AblyPublisher
             return ['enabled' => false];
         }
 
-        $capability = [];
-
-        foreach ($user->workspaces()->pluck('workspaces.id') as $workspaceId) {
-            $capability[$this->messageChannel($workspaceId, '*')] = ['subscribe'];
-            $capability["smackchat:ws:{$workspaceId}:typing:*"] = ['subscribe', 'publish'];
-            $capability[$this->shiftChannel($workspaceId, $user->id)] = ['subscribe'];
-            $capability[$this->workspaceEventsChannel($workspaceId)] = ['subscribe'];
-        }
+        $capability = $this->capability($user);
 
         try {
             $client = Server::createHttpClient(config('services.ably.key'));
@@ -95,6 +89,35 @@ class AblyPublisher
 
             return ['enabled' => false];
         }
+    }
+
+    /**
+     * Ably permissions for one person: only the channels they can actually
+     * read, never a workspace-wide wildcard.
+     */
+    public function capability(User $user): array
+    {
+        $capability = [];
+
+        foreach ($user->workspaces()->pluck('workspaces.id') as $workspaceId) {
+            $visible = Channel::query()
+                ->where('workspace_id', $workspaceId)
+                ->where(function ($query) use ($user) {
+                    $query->where('type', Channel::PUBLIC)
+                        ->orWhereHas('members', fn ($members) => $members->where('user_id', $user->id));
+                })
+                ->pluck('id');
+
+            foreach ($visible as $channelId) {
+                $capability[$this->messageChannel($workspaceId, $channelId)] = ['subscribe'];
+                $capability["smackchat:ws:{$workspaceId}:typing:{$channelId}"] = ['subscribe', 'publish'];
+            }
+
+            $capability[$this->shiftChannel($workspaceId, $user->id)] = ['subscribe'];
+            $capability[$this->workspaceEventsChannel($workspaceId)] = ['subscribe'];
+        }
+
+        return $capability;
     }
 
     public function messageChannel(int|string $workspaceId, int|string $channelId): string

@@ -107,7 +107,7 @@ function saveDraft(json) {
 const editor = useEditor({
     content: draftContent(),
     extensions: [
-        StarterKit.configure({ heading: false }),
+        StarterKit.configure({ heading: false, link: false, underline: false }),
         Underline,
         Link.configure({ openOnClick: false, autolink: true }),
         Placeholder.configure({ placeholder: props.placeholder }),

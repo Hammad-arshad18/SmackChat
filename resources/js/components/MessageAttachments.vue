@@ -4,6 +4,7 @@ import { useUiStore } from '@/stores/ui';
 import {
     attachmentFrameStyle,
     attachmentIdFromUrl,
+    attachmentRefFromUrl,
     cachedAttachmentUrl,
     fetchAttachmentBlobUrl,
     releaseAttachment,
@@ -37,7 +38,11 @@ function iconFor(item) {
 }
 
 function idFor(item) {
-    return item?.id || attachmentIdFromUrl(item?.url);
+    return item?.id || attachmentIdFromUrl(item?.url) || attachmentRefFromUrl(item?.url);
+}
+
+function refFor(item) {
+    return item?.ref || attachmentRefFromUrl(item?.url) || null;
 }
 
 function srcFor(item) {
@@ -100,7 +105,7 @@ async function hydrate(item) {
     }
 
     if (!sources[id]) {
-        const url = await fetchAttachmentBlobUrl(id);
+        const url = await fetchAttachmentBlobUrl(id, refFor(item));
         if (!url) {
             failed[id] = true;
             return;

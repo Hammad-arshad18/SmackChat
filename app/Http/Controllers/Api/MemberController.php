@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\Invitation;
 use App\Models\User;
 use App\Models\WorkspaceMember;
+use App\Services\AuditLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -40,7 +41,7 @@ class MemberController extends ApiController
                 'id' => $invitation->id,
                 'email' => $invitation->email,
                 'role' => $invitation->role,
-                'url' => url('/invite/'.$invitation->token),
+                'url' => rtrim((string) config('app.url'), '/').'/invite/'.$invitation->token,
                 'expires_at' => $invitation->expires_at->toIso8601String(),
             ]);
 
@@ -50,7 +51,7 @@ class MemberController extends ApiController
         ]);
     }
 
-    public function invite(Request $request)
+    public function invite(Request $request, AuditLogger $audit)
     {
         $this->requireManager($request);
         $workspace = $this->workspace($request);
@@ -84,18 +85,27 @@ class MemberController extends ApiController
             'expires_at' => now()->addDays(14),
         ]);
 
-        $url = url('/invite/'.$invitation->token);
+        $url = rtrim((string) config('app.url'), '/').'/invite/'.$invitation->token;
 
-        try {
-            Mail::raw(
-                $request->user()->name.' invited you to '.$workspace->name.' on SmackChat. Join here: '.$url,
-                function ($mail) use ($invitation, $workspace) {
-                    $mail->to($invitation->email)->subject('Join '.$workspace->name.' on SmackChat');
-                }
-            );
-        } catch (\Throwable $exception) {
-            report($exception);
-        }
+        $audit->record('member.invited', $workspace, $request->user(), [
+            'email' => $invitation->email,
+            'role' => $invitation->role,
+        ], $invitation, $request);
+
+        $inviterName = $request->user()->name;
+
+        defer(function () use ($inviterName, $invitation, $workspace, $url) {
+            try {
+                Mail::raw(
+                    $inviterName.' invited you to '.$workspace->name.' on SmackChat. Join here: '.$url,
+                    function ($mail) use ($invitation, $workspace) {
+                        $mail->to($invitation->email)->subject('Join '.$workspace->name.' on SmackChat');
+                    }
+                );
+            } catch (\Throwable $exception) {
+                report($exception);
+            }
+        });
 
         return response()->json([
             'invitation' => [
@@ -108,7 +118,7 @@ class MemberController extends ApiController
         ], 201);
     }
 
-    public function updateRole(Request $request, string $workspace, User $user)
+    public function updateRole(Request $request, string $workspace, User $user, AuditLogger $audit)
     {
         $this->requireOwner($request);
         $workspaceModel = $this->workspace($request);
@@ -122,7 +132,14 @@ class MemberController extends ApiController
             ->firstOrFail();
 
         abort_if($target->role === WorkspaceMember::OWNER, 422, 'The owner role cannot be changed.');
+        $previous = $target->role;
         $target->update(['role' => $data['role']]);
+
+        $audit->record('member.role_changed', $workspaceModel, $request->user(), [
+            'member_id' => $user->id,
+            'from' => $previous,
+            'to' => $target->role,
+        ], $user, $request);
 
         return response()->json([
             'member' => [
@@ -133,16 +150,19 @@ class MemberController extends ApiController
         ]);
     }
 
-    public function revokeInvitation(Request $request, string $workspace, Invitation $invitation)
+    public function revokeInvitation(Request $request, string $workspace, Invitation $invitation, AuditLogger $audit)
     {
         $this->requireManager($request);
         abort_unless($invitation->workspace_id === $this->workspace($request)->id, 404);
+        $audit->record('invitation.revoked', $this->workspace($request), $request->user(), [
+            'email' => $invitation->email,
+        ], $invitation, $request);
         $invitation->delete();
 
         return response()->json(['ok' => true]);
     }
 
-    public function destroy(Request $request, string $workspace, User $user)
+    public function destroy(Request $request, string $workspace, User $user, AuditLogger $audit)
     {
         $workspaceModel = $this->workspace($request);
         $actor = $this->membership($request);
@@ -171,6 +191,11 @@ class MemberController extends ApiController
                 $user->forceFill(['current_workspace_id' => null])->save();
             }
         });
+
+        $audit->record($self ? 'member.left' : 'member.removed', $workspaceModel, $request->user(), [
+            'member_id' => $user->id,
+            'role' => $target->role,
+        ], $user, $request);
 
         return response()->json(['ok' => true]);
     }

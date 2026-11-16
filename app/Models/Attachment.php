@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\OpaqueId;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -49,10 +50,16 @@ class Attachment extends Model
         return 'file';
     }
 
+    public function ref(): string
+    {
+        return OpaqueId::encode($this->id);
+    }
+
     public function present(): array
     {
         return [
             'id' => $this->id,
+            'ref' => $this->ref(),
             'name' => $this->original_name,
             'mime' => $this->mime_type,
             'extension' => $this->extension,
@@ -60,7 +67,7 @@ class Attachment extends Model
             'width' => $this->width ? (int) $this->width : null,
             'height' => $this->height ? (int) $this->height : null,
             'kind' => $this->kind(),
-            'url' => url('/api/attachments/'.$this->id),
+            'url' => url('/api/attachments/'.$this->ref()),
         ];
     }
 }

@@ -183,6 +183,16 @@ class ChannelController extends ApiController
 
         $ids = collect($data['member_ids']);
 
+        if ($model->type === Channel::PRIVATE && ! $this->membership($request)->managesOffice()) {
+            $removingOthers = $model->members()
+                ->pluck('users.id')
+                ->diff($ids)
+                ->reject(fn ($id) => (int) $id === $request->user()->id)
+                ->isNotEmpty();
+
+            abort_if($removingOthers, 403, 'Only an admin can remove people from a private channel.');
+        }
+
         if ($model->type === Channel::ATTENDANCE) {
             $ids->push($workspaceModel->owner_id);
         } else {

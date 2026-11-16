@@ -3,7 +3,10 @@
 namespace App\Console\Commands;
 
 use App\Models\Attachment;
+use App\Models\AttendanceDay;
+use App\Models\AuditEvent;
 use App\Models\Message;
+use App\Models\RegistrationChallenge;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
@@ -59,7 +62,28 @@ class PruneHistory extends Command
 
         $this->info('Pruned '.$roots.' conversations, '.$replies.' older replies, and '.$files.' attachment files.');
 
+        $this->pruneHousekeeping();
+
         return self::SUCCESS;
+    }
+
+    private function pruneHousekeeping(): void
+    {
+        $challenges = RegistrationChallenge::query()
+            ->where('expires_at', '<', now()->subDay())
+            ->delete();
+
+        $auditDays = (int) config('smackchat.audit_retention_days', 365);
+        $audit = $auditDays > 0
+            ? AuditEvent::query()->where('created_at', '<', now()->subDays($auditDays))->delete()
+            : 0;
+
+        $attendanceDays = (int) config('smackchat.attendance_retention_days', 0);
+        $attendance = $attendanceDays > 0
+            ? AttendanceDay::query()->where('work_date', '<', now()->subDays($attendanceDays)->toDateString())->delete()
+            : 0;
+
+        $this->info('Housekeeping: '.$challenges.' expired codes, '.$audit.' audit rows, '.$attendance.' attendance rows.');
     }
 
     /**

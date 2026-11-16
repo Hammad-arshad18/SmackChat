@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureWorkspaceMember;
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -16,9 +17,14 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->statefulApi();
-        // Hostinger (and most reverse proxies) forward the real client IP.
-        // Office presence checks depend on Request::ip() seeing that address.
-        $middleware->trustProxies(at: '*');
+        // Empty on purpose: with no trusted proxy, X-Forwarded-* headers are
+        // ignored. Office-network presence and IP rate limits read the real
+        // REMOTE_ADDR, so a client cannot spoof them with a header.
+        // If you put a load balancer or CDN in front of the app, list its
+        // addresses here (never use '*': every security decision would trust
+        // whatever the caller sends).
+        $middleware->trustProxies(at: []);
+        $middleware->append(SecurityHeaders::class);
         $middleware->redirectGuestsTo(function (Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return null;

@@ -3,12 +3,13 @@ import { computed, ref } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import BrandMark from '@/components/BrandMark.vue';
 import { useAuthStore } from '@/stores/auth';
-import { errorText } from '@/api';
+import api, { errorText } from '@/api';
 
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const mode = ref(route.query.mode === 'register' ? 'register' : 'login');
+const queryMode = typeof route.query.mode === 'string' ? route.query.mode : '';
+const mode = ref(['register', 'forgot', 'reset'].includes(queryMode) ? queryMode : 'login');
 const step = ref('form');
 const modes = [
     { label: 'Log in', value: 'login' },
@@ -20,6 +21,8 @@ const busy = ref(false);
 const resending = ref(false);
 const otp = ref('');
 const pendingEmail = ref('');
+const resetToken = ref(typeof route.query.token === 'string' ? route.query.token : '');
+const resetEmail = ref(typeof route.query.email === 'string' ? route.query.email : '');
 const form = ref({
     name: '',
     email: '',
@@ -30,6 +33,7 @@ const form = ref({
 });
 const isDev = import.meta.env.DEV;
 const isRegister = computed(() => mode.value === 'register');
+const isRecovery = computed(() => mode.value === 'forgot' || mode.value === 'reset');
 const verifying = computed(() => isRegister.value && step.value === 'verify');
 
 function switchMode(next) {
@@ -46,6 +50,27 @@ async function submit() {
     notice.value = '';
     busy.value = true;
     try {
+        if (mode.value === 'forgot') {
+            const { data } = await api.post('/forgot-password', { email: form.value.email });
+            notice.value = data.message || 'If that email belongs to an account, a reset link is on its way.';
+            return;
+        }
+
+        if (mode.value === 'reset') {
+            await api.post('/reset-password', {
+                token: resetToken.value,
+                email: resetEmail.value || form.value.email,
+                password: form.value.password,
+                password_confirmation: form.value.password_confirmation,
+            });
+            mode.value = 'login';
+            form.value.password = '';
+            form.value.password_confirmation = '';
+            notice.value = 'Password updated. Log in with the new one.';
+            router.replace({ path: '/login' });
+            return;
+        }
+
         if (mode.value === 'login') {
             await auth.login({ email: form.value.email, password: form.value.password });
             router.push(route.query.next || '/app');
@@ -164,11 +189,17 @@ function demo(email) {
         <section class="auth-card-wrap">
             <div class="auth-card">
                 <div class="auth-card-head">
-                    <p class="eyebrow">{{ verifying ? 'Almost there' : (isRegister ? 'Start fresh' : 'Welcome back') }}</p>
-                    <h2>{{ verifying ? 'Check your email' : (isRegister ? 'Open a workspace' : 'Log in to your workspace') }}</h2>
+                    <p class="eyebrow">{{ verifying ? 'Almost there' : (mode === 'forgot' ? 'Forgot password' : (mode === 'reset' ? 'Choose a new password' : (isRegister ? 'Start fresh' : 'Welcome back'))) }}</p>
+                    <h2>{{ verifying ? 'Check your email' : (mode === 'forgot' ? 'Send a reset link' : (mode === 'reset' ? 'Set a new password' : (isRegister ? 'Open a workspace' : 'Log in to your workspace'))) }}</h2>
                     <p>
                         <template v-if="verifying">
                             Enter the six-digit code we sent to <strong>{{ pendingEmail }}</strong> to finish creating the workspace.
+                        </template>
+                        <template v-else-if="mode === 'forgot'">
+                            Tell us the email on the account and we’ll send a link to choose a new password.
+                        </template>
+                        <template v-else-if="mode === 'reset'">
+                            Pick a new password for <strong>{{ resetEmail }}</strong>. Every other device will be signed out.
                         </template>
                         <template v-else-if="isRegister">
                             A company, a floor clock, and a place for the team to talk. We’ll verify your email before the workspace opens.
@@ -180,7 +211,7 @@ function demo(email) {
                 </div>
 
                 <SelectButton
-                    v-if="!verifying"
+                    v-if="!verifying && !isRecovery"
                     :model-value="mode"
                     :options="modes"
                     option-label="label"
@@ -196,6 +227,48 @@ function demo(email) {
                             <label>Verification code</label>
                             <InputOtp v-model="otp" integer-only :length="6" class="auth-otp" />
                             <small class="fine">Codes expire in 10 minutes.</small>
+                        </div>
+                    </template>
+
+                    <template v-else-if="mode === 'forgot'">
+                        <div class="field">
+                            <label>Work email</label>
+                            <IconField>
+                                <InputIcon class="pi pi-envelope" />
+                                <InputText v-model="form.email" type="email" placeholder="you@company.com" autocomplete="username" fluid />
+                            </IconField>
+                        </div>
+                    </template>
+
+                    <template v-else-if="mode === 'reset'">
+                        <div class="field">
+                            <label>New password</label>
+                            <Password
+                                v-model="form.password"
+                                :feedback="true"
+                                toggle-mask
+                                placeholder="At least 8 characters"
+                                autocomplete="new-password"
+                                prompt-label="Add a password"
+                                weak-label="Keep going"
+                                medium-label="Good"
+                                strong-label="Strong"
+                                input-class="auth-password-input"
+                                fluid
+                            />
+                        </div>
+
+                        <div class="field">
+                            <label>Confirm password</label>
+                            <Password
+                                v-model="form.password_confirmation"
+                                toggle-mask
+                                :feedback="false"
+                                placeholder="Repeat it"
+                                autocomplete="new-password"
+                                input-class="auth-password-input"
+                                fluid
+                            />
                         </div>
                     </template>
 
@@ -257,13 +330,21 @@ function demo(email) {
 
                     <Button
                         type="submit"
-                        :label="verifying ? 'Verify and open workspace' : (isRegister ? 'Send verification code' : 'Log in')"
-                        :icon="verifying ? 'pi pi-shield' : (isRegister ? 'pi pi-envelope' : 'pi pi-sign-in')"
+                        :label="verifying ? 'Verify and open workspace' : (mode === 'forgot' ? 'Email me a link' : (mode === 'reset' ? 'Save new password' : (isRegister ? 'Send verification code' : 'Log in')))"
+                        :icon="verifying ? 'pi pi-shield' : (mode === 'forgot' ? 'pi pi-envelope' : (mode === 'reset' ? 'pi pi-key' : (isRegister ? 'pi pi-envelope' : 'pi pi-sign-in')))"
                         :loading="busy"
                         :disabled="verifying && String(otp || '').replace(/\D/g, '').length !== 6"
                         fluid
                         class="auth-submit"
                     />
+
+                    <div v-if="mode === 'login' && !verifying" class="otp-actions">
+                        <Button type="button" label="Forgot password?" text severity="secondary" @click="switchMode('forgot')" />
+                    </div>
+
+                    <div v-if="isRecovery" class="otp-actions">
+                        <Button type="button" label="Back to log in" text severity="secondary" @click="switchMode('login')" />
+                    </div>
 
                     <div v-if="verifying" class="otp-actions">
                         <Button type="button" label="Use a different email" text severity="secondary" @click="step = 'form'" />
@@ -271,7 +352,7 @@ function demo(email) {
                     </div>
                 </form>
 
-                <div v-if="isDev && !verifying" class="demo-box">
+                <div v-if="isDev && !verifying && !isRecovery" class="demo-box">
                     <div class="demo-head"><span><i class="pi pi-sparkles" /> Demo access</span><Tag value="Dev only" severity="secondary" /></div>
                     <div class="demo-buttons">
                         <button type="button" @click="demo('ada@northwind.test')"><Avatar label="A" shape="circle" style="background:#e23d2b;color:#fff" /> <span>Ada · Owner</span></button>

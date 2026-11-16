@@ -52,7 +52,7 @@
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=bricolage-grotesque:400,500,600,700,800|inter:400,500,600,700" rel="stylesheet">
 
-    <script type="application/ld+json">
+    <script type="application/ld+json" nonce="{{ $cspNonce ?? '' }}">
         {!! json_encode([
             '@context' => 'https://schema.org',
             '@type' => 'WebApplication',
@@ -73,7 +73,7 @@
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body>
-    <script>
+    <script nonce="{{ $cspNonce ?? '' }}">
         (function () {
             var standalone = window.matchMedia('(display-mode: standalone)').matches
                 || window.matchMedia('(display-mode: window-controls-overlay)').matches

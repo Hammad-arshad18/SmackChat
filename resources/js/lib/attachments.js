@@ -41,6 +41,12 @@ export function attachmentIdFromUrl(url) {
     return match ? Number(match[1]) : null;
 }
 
+export function attachmentRefFromUrl(url) {
+    const match = String(url || '').match(/\/attachments\/(v1\.[A-Za-z0-9_-]+)/);
+
+    return match ? match[1] : null;
+}
+
 async function readDisk(id) {
     if (typeof caches === 'undefined') {
         return null;
@@ -109,28 +115,32 @@ function remember(id, blob) {
     return url;
 }
 
-export async function fetchAttachmentBlobUrl(id) {
-    if (!id) {
+export async function fetchAttachmentBlobUrl(id, ref = null) {
+    if (!id && !ref) {
         return null;
     }
 
-    if (blobUrls.has(id)) {
-        touch(id);
+    const key = id || ref;
 
-        return blobUrls.get(id);
+    if (blobUrls.has(key)) {
+        touch(key);
+
+        return blobUrls.get(key);
     }
 
-    if (inflight.has(id)) {
-        return inflight.get(id);
+    if (inflight.has(key)) {
+        return inflight.get(key);
     }
+
+    const token = ref || id;
 
     const promise = (async () => {
-        const cached = await readDisk(id);
+        const cached = await readDisk(key);
         if (cached && cached.size > 0) {
-            return remember(id, cached);
+            return remember(key, cached);
         }
 
-        const response = await api.get(`/attachments/${id}`, {
+        const response = await api.get(`/attachments/${token}`, {
             responseType: 'blob',
             headers: { Accept: '*/*' },
         });
@@ -147,14 +157,14 @@ export async function fetchAttachmentBlobUrl(id) {
 
         const blob = data.type ? data : new Blob([data], { type: type || 'application/octet-stream' });
 
-        return remember(id, blob);
+        return remember(key, blob);
     })()
         .catch(() => null)
         .finally(() => {
-            inflight.delete(id);
+            inflight.delete(key);
         });
 
-    inflight.set(id, promise);
+    inflight.set(key, promise);
 
     return promise;
 }
@@ -206,17 +216,18 @@ export function warmAttachmentCache(id, blob) {
 }
 
 export function prefetchAttachments(items = []) {
-    const ids = [];
+    const queue = [];
 
     for (const item of items) {
-        const id = item?.id || attachmentIdFromUrl(item?.url);
+        const ref = item?.ref || attachmentRefFromUrl(item?.url);
+        const id = item?.id || ref;
         if (id && !blobUrls.has(id) && !inflight.has(id)) {
-            ids.push(id);
+            queue.push({ id, ref });
         }
     }
 
-    ids.slice(0, 12).forEach((id) => {
-        fetchAttachmentBlobUrl(id).catch(() => {});
+    queue.slice(0, 12).forEach(({ id, ref }) => {
+        fetchAttachmentBlobUrl(id, ref).catch(() => {});
     });
 }
 

@@ -2,6 +2,15 @@
 
 namespace App\Providers;
 
+use App\Models\User;
+use Illuminate\Auth\Notifications\ResetPassword;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Foundation\Events\DiagnosingHealth;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -19,6 +28,54 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        $this->forceHttpsInProduction();
+        $this->healthCheck();
+        $this->passwordResetUrl();
+        $this->rateLimiters();
+    }
+
+    private function forceHttpsInProduction(): void
+    {
+        if (! $this->app->isProduction()) {
+            return;
+        }
+
+        URL::forceScheme('https');
+        // Secure cookies must be explicit: behind a proxy Laravel cannot always
+        // tell that the request arrived over TLS.
+        config(['session.secure' => true]);
+    }
+
+    /**
+     * `/up` only proves PHP booted. Make it fail when MySQL is unreachable so
+     * uptime monitors and the deploy smoke test notice.
+     */
+    private function healthCheck(): void
+    {
+        Event::listen(DiagnosingHealth::class, function (): void {
+            DB::connection()->getPdo()->query('select 1');
+        });
+    }
+
+    private function passwordResetUrl(): void
+    {
+        ResetPassword::createUrlUsing(function (User $user, string $token): string {
+            return rtrim((string) config('app.url'), '/')
+                .'/login?mode=reset&token='.urlencode($token)
+                .'&email='.urlencode($user->email);
+        });
+    }
+
+    private function rateLimiters(): void
+    {
+        $byUser = fn (Request $request) => $request->user()?->id ?: $request->ip();
+
+        RateLimiter::for('login', fn (Request $request) => Limit::perMinute(20)->by($request->ip()));
+        RateLimiter::for('messages', fn (Request $request) => Limit::perMinute(120)->by($byUser($request)));
+        RateLimiter::for('attachments', fn (Request $request) => Limit::perMinute(180)->by($byUser($request)));
+        RateLimiter::for('uploads', fn (Request $request) => Limit::perMinute(20)->by($byUser($request)));
+        RateLimiter::for('search', fn (Request $request) => Limit::perMinute(60)->by($byUser($request)));
+        RateLimiter::for('exports', fn (Request $request) => Limit::perMinute(5)->by($byUser($request)));
+        RateLimiter::for('presence', fn (Request $request) => Limit::perMinute(10)->by($byUser($request)));
     }
 }

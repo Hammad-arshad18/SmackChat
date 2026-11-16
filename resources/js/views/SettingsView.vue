@@ -31,6 +31,9 @@ const avatarInput = ref(null);
 const logoBusy = ref(false);
 const logoInput = ref(null);
 const aiBusy = ref(false);
+const deleteOpen = ref(false);
+const deletePassword = ref('');
+const deleting = ref(false);
 const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Dubai', 'Europe/London', 'America/New_York'];
 const form = reactive({
     name: '',
@@ -297,6 +300,45 @@ function leaveWorkspace() {
         },
     });
 }
+
+async function downloadMyData() {
+    try {
+        const response = await api.get('/me/export', { responseType: 'blob' });
+        const url = URL.createObjectURL(response.data);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'smackchat-export.json';
+        link.rel = 'noreferrer';
+        link.click();
+        URL.revokeObjectURL(url);
+    } catch (error) {
+        toast.add({ severity: 'error', summary: 'Export failed', detail: errorText(error, 'Could not build your export.'), life: 3500 });
+    }
+}
+
+async function deleteAccount() {
+    if (!deletePassword.value) {
+        return;
+    }
+
+    deleting.value = true;
+    try {
+        await api.delete('/me', { data: { password: deletePassword.value } });
+        deleteOpen.value = false;
+        deletePassword.value = '';
+        try {
+            await auth.logout();
+        } catch {
+            /* the session is already gone */
+        }
+        auth.user = null;
+        router.push('/login');
+    } catch (error) {
+        toast.add({ severity: 'error', summary: 'Not deleted', detail: errorText(error, 'Could not delete the account.'), life: 4000 });
+    } finally {
+        deleting.value = false;
+    }
+}
 </script>
 
 <template>
@@ -557,8 +599,28 @@ function leaveWorkspace() {
                     <i class="pi pi-lock" />
                     <p>Message text is encrypted on this device before it is sent. The server stores and delivers the ciphertext, and only devices in the conversation can read it. The history window is controlled by the workspace plan.</p>
                 </div>
-                <Button label="Open command palette" icon="pi pi-search" severity="secondary" outlined size="small" @click="ui.openCommand()" />
+
+                <div class="workspace-actions">
+                    <Button label="Download my data" icon="pi pi-download" severity="secondary" outlined size="small" @click="downloadMyData" />
+                    <Button label="Delete account" icon="pi pi-trash" severity="danger" text size="small" @click="deleteOpen = true" />
+                    <Button label="Open command palette" icon="pi pi-search" severity="secondary" outlined size="small" @click="ui.openCommand()" />
+                </div>
             </section>
         </div>
+
+        <Dialog v-model:visible="deleteOpen" modal header="Delete account" :style="{ width: 'min(92vw, 440px)' }">
+            <p>
+                This removes your profile and signs you out everywhere. Workspaces where you are the only member are deleted.
+                Messages you sent stay in their conversations without your name.
+            </p>
+            <div class="field">
+                <label>Confirm with your password</label>
+                <Password v-model="deletePassword" toggle-mask :feedback="false" placeholder="Current password" fluid />
+            </div>
+            <template #footer>
+                <Button label="Cancel" text severity="secondary" @click="deleteOpen = false" />
+                <Button label="Delete account" severity="danger" :loading="deleting" :disabled="!deletePassword" @click="deleteAccount" />
+            </template>
+        </Dialog>
     </div>
 </template>
