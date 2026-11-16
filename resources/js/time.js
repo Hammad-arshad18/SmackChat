@@ -98,6 +98,24 @@ export function minutesLabel(minutes) {
     return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
+export function isAttendanceOffDay(day) {
+    return Boolean(day?.non_working_day || day?.holiday_name);
+}
+
+/** Match AttendanceCalculator::portions — off-day shifts are all overtime. */
+export function workPortions(workMinutes, standardMinutes = 480, offDay = false) {
+    const worked = Math.max(0, workMinutes || 0);
+
+    if (offDay) {
+        return { regular_minutes: 0, overtime_minutes: worked };
+    }
+
+    const standard = Math.max(0, standardMinutes || 0);
+    const regular = Math.min(worked, standard);
+
+    return { regular_minutes: regular, overtime_minutes: worked - regular };
+}
+
 export function durationClock(seconds) {
     const total = Math.max(0, Math.floor(seconds || 0));
     const hours = Math.floor(total / 3600);

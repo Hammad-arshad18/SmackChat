@@ -13,10 +13,12 @@ import {
     greeting,
     isoDate,
     minutesLabel,
+    isAttendanceOffDay,
     shiftTotals,
     startOfWeek,
     timeAgo,
     wallClockLabel,
+    workPortions,
 } from '@/time';
 
 const office = useOfficeStore();
@@ -51,7 +53,12 @@ const liveWorkMinutes = computed(() => {
 
     return Math.floor(shiftTotals(office.today.events || [], now.value).workSeconds / 60);
 });
-const liveOvertimeMinutes = computed(() => Math.max(0, liveWorkMinutes.value - standardMinutes.value));
+const todayOffDay = computed(() => isAttendanceOffDay(office.today));
+const liveOvertimeMinutes = computed(() => workPortions(
+    liveWorkMinutes.value,
+    standardMinutes.value,
+    todayOffDay.value,
+).overtime_minutes);
 const rowFor = (date) => myRows.value.find((row) => row.work_date === isoDate(date));
 const minutesFor = (date) => {
     const row = rowFor(date);
@@ -127,6 +134,10 @@ const nextHoliday = computed(() => {
 
 const summary = computed(() => {
     if (office.today?.status === 'open') {
+        if (todayOffDay.value && liveOvertimeMinutes.value > 0) {
+            return `This is an off day, so ${minutesLabel(liveOvertimeMinutes.value)} so far is overtime. Breaks are not counted.`;
+        }
+
         if (liveOvertimeMinutes.value > 0) {
             return `You're past a ${minutesLabel(standardMinutes.value)} day, with ${minutesLabel(liveOvertimeMinutes.value)} of overtime. Breaks are not counted.`;
         }

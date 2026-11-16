@@ -55,4 +55,20 @@ class AttendanceCalculatorTest extends TestCase
             $calculator->portions(487, 480),
         );
     }
+
+    public function test_off_day_work_is_all_overtime_and_still_sums_to_the_shift(): void
+    {
+        $calculator = new AttendanceCalculator;
+
+        $offDay = $calculator->portions(240, 480, true);
+        $this->assertSame(['regular_minutes' => 0, 'overtime_minutes' => 240], $offDay);
+        $this->assertSame(240, $offDay['regular_minutes'] + $offDay['overtime_minutes']);
+
+        $empty = $calculator->portions(0, 480, true);
+        $this->assertSame(['regular_minutes' => 0, 'overtime_minutes' => 0], $empty);
+
+        $weekday = $calculator->portions(240, 480, false);
+        $this->assertSame(['regular_minutes' => 240, 'overtime_minutes' => 0], $weekday);
+        $this->assertSame(240, $weekday['regular_minutes'] + $weekday['overtime_minutes']);
+    }
 }

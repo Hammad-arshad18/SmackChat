@@ -60,12 +60,21 @@ class AttendanceCalculator
 
     /**
      * Breaks are already out of $workMinutes. Time past a standard day is overtime.
+     * On off days (outside the working week or a holiday), all worked time is overtime.
      *
      * @return array{regular_minutes: int, overtime_minutes: int}
      */
-    public function portions(int $workMinutes, int $standardMinutes = 480): array
+    public function portions(int $workMinutes, int $standardMinutes = 480, bool $offDay = false): array
     {
         $worked = max($workMinutes, 0);
+
+        if ($offDay) {
+            return [
+                'regular_minutes' => 0,
+                'overtime_minutes' => $worked,
+            ];
+        }
+
         $regular = min($worked, max($standardMinutes, 0));
 
         return [
