@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\Holiday;
+use App\Services\AuditLogger;
 use App\Services\ScheduleInspector;
 use App\Support\OfficeNetwork;
 use Illuminate\Http\Request;
@@ -51,7 +52,7 @@ class ScheduleController extends ApiController
         ]);
     }
 
-    public function update(Request $request)
+    public function update(Request $request, AuditLogger $audit)
     {
         $this->requireManager($request);
         $data = $request->validate([
@@ -149,10 +150,19 @@ class ScheduleController extends ApiController
 
         $workspace->update($updates);
 
+        $audit->record('schedule.updated', $workspace, $request->user(), [
+            'timezone' => $updates['timezone'],
+            'work_start' => $updates['work_start'],
+            'work_end' => $updates['work_end'],
+            'work_days' => $updates['work_days'],
+            'break_allowance_minutes' => $updates['break_allowance_minutes'],
+            'location_restricted' => $workspace->location_restricted,
+        ], null, $request);
+
         return $this->show($request, app(ScheduleInspector::class));
     }
 
-    public function storeHoliday(Request $request)
+    public function storeHoliday(Request $request, AuditLogger $audit)
     {
         $this->requireManager($request);
         $data = $request->validate([
@@ -167,6 +177,11 @@ class ScheduleController extends ApiController
             'repeats_yearly' => (bool) ($data['repeats_yearly'] ?? false),
         ]);
 
+        $audit->record('holiday.added', $this->workspace($request), $request->user(), [
+            'name' => $holiday->name,
+            'observed_on' => $holiday->observed_on->toDateString(),
+        ], $holiday, $request);
+
         return response()->json([
             'holiday' => [
                 'id' => $holiday->id,
@@ -177,10 +192,14 @@ class ScheduleController extends ApiController
         ], 201);
     }
 
-    public function destroyHoliday(Request $request, string $workspace, Holiday $holiday)
+    public function destroyHoliday(Request $request, string $workspace, Holiday $holiday, AuditLogger $audit)
     {
         $this->requireManager($request);
         abort_unless($holiday->workspace_id === $this->workspace($request)->id, 404);
+        $audit->record('holiday.removed', $this->workspace($request), $request->user(), [
+            'name' => $holiday->name,
+            'observed_on' => $holiday->observed_on->toDateString(),
+        ], $holiday, $request);
         $holiday->delete();
 
         return response()->json(['ok' => true]);

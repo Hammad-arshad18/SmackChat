@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Services\AblyPublisher;
+use App\Services\AuditLogger;
 use App\Services\ChannelAccess;
 use App\Services\MessageCipher;
 use App\Services\MessagePresenter;
@@ -204,15 +205,24 @@ class MessageController extends ApiController
         return response()->json($writer->editSealed($message, $request->user(), $data['sealed']));
     }
 
-    public function destroy(Request $request, string $workspace, Message $message, ChannelAccess $access, MessageWriter $writer)
+    public function destroy(Request $request, string $workspace, Message $message, ChannelAccess $access, MessageWriter $writer, AuditLogger $audit)
     {
         $this->guardMessage($request, $message, $access);
-
-        return response()->json($writer->delete(
+        $authorId = $message->user_id;
+        $payload = $writer->delete(
             $message,
             $request->user(),
             $this->membership($request)->managesOffice()
-        ));
+        );
+
+        if ($authorId !== $request->user()->id) {
+            $audit->record('message.deleted_by_manager', $this->workspace($request), $request->user(), [
+                'author_id' => $authorId,
+                'message_ref' => OpaqueId::encode($message->id),
+            ], $message, $request);
+        }
+
+        return response()->json($payload);
     }
 
     public function react(Request $request, string $workspace, Message $message, ChannelAccess $access, AblyPublisher $ably)

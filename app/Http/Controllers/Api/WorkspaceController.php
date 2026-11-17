@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\Workspace;
+use App\Services\AuditLogger;
 use App\Services\WorkspaceProvisioner;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -67,7 +68,7 @@ class WorkspaceController extends ApiController
         ]);
     }
 
-    public function update(Request $request)
+    public function update(Request $request, AuditLogger $audit)
     {
         $this->requireManager($request);
         $data = $request->validate([
@@ -75,12 +76,19 @@ class WorkspaceController extends ApiController
             'timezone' => ['required', 'timezone:all'],
         ]);
 
-        $this->workspace($request)->update($data);
+        $workspace = $this->workspace($request);
+        $before = ['name' => $workspace->name, 'timezone' => $workspace->timezone];
+        $workspace->update($data);
+
+        $audit->record('workspace.updated', $workspace, $request->user(), [
+            'before' => $before,
+            'after' => $data,
+        ], $workspace, $request);
 
         return $this->show($request);
     }
 
-    public function updateLogo(Request $request)
+    public function updateLogo(Request $request, AuditLogger $audit)
     {
         $this->requireManager($request);
         $data = $request->validate([
@@ -94,15 +102,19 @@ class WorkspaceController extends ApiController
         $path = $file->storeAs('logos/'.$workspace->id, Str::uuid()->toString().'.'.$extension, 'local');
         $workspace->forceFill(['logo_path' => $path])->save();
 
+        $audit->record('workspace.logo_changed', $workspace, $request->user(), [], $workspace, $request);
+
         return $this->show($request);
     }
 
-    public function destroyLogo(Request $request)
+    public function destroyLogo(Request $request, AuditLogger $audit)
     {
         $this->requireManager($request);
         $workspace = $this->workspace($request);
         $this->deleteLogo($workspace);
         $workspace->forceFill(['logo_path' => null])->save();
+
+        $audit->record('workspace.logo_removed', $workspace, $request->user(), [], $workspace, $request);
 
         return $this->show($request);
     }

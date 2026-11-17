@@ -78,6 +78,68 @@ class OfficeChatTest extends TestCase
         $this->getJson('/api/attachments/1')->assertUnauthorized();
     }
 
+    public function test_attachments_stay_inside_their_workspace_and_use_opaque_links(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        $upload = $this->actingAs($owner, 'sanctum')
+            ->post("/api/workspaces/{$workspace->slug}/channels/general/attachments", [
+                'file' => UploadedFile::fake()->image('payroll.png', 40, 40),
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('attachment');
+
+        $this->assertMatchesRegularExpression('#/api/attachments/v1\.[A-Za-z0-9_-]+$#', $upload['url']);
+        $this->assertStringEndsWith('/'.$upload['ref'], $upload['url']);
+
+        // Raw ids are no longer routable, so files cannot be enumerated.
+        $this->actingAs($owner, 'sanctum')
+            ->get('/api/attachments/'.$upload['id'])
+            ->assertNotFound();
+
+        // Someone signed in to another workspace must not read it, even on a public channel.
+        $stranger = User::factory()->create();
+        app(WorkspaceProvisioner::class)->create($stranger, 'Other Studio', 'UTC');
+
+        $this->actingAs($stranger, 'sanctum')
+            ->get($upload['url'])
+            ->assertNotFound();
+
+        // The owner can still download it.
+        $this->actingAs($owner, 'sanctum')
+            ->get($upload['url'])
+            ->assertOk();
+    }
+
+    public function test_attachment_requires_membership_of_a_private_channel(): void
+    {
+        $owner = $this->openOffice();
+        $member = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $member, 'member');
+
+        $slug = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/channels", [
+                'name' => 'Payroll',
+                'private' => true,
+                'member_ids' => [],
+            ])
+            ->assertCreated()
+            ->json('slug');
+
+        $upload = $this->actingAs($owner, 'sanctum')
+            ->post("/api/workspaces/{$workspace->slug}/channels/{$slug}/attachments", [
+                'file' => UploadedFile::fake()->image('salaries.png', 10, 10),
+            ], ['Accept' => 'application/json'])
+            ->assertCreated()
+            ->json('attachment');
+
+        $this->actingAs($member, 'sanctum')
+            ->get($upload['url'])
+            ->assertForbidden();
+    }
+
     public function test_messages_can_include_uploaded_media(): void
     {
         $owner = $this->openOffice();

@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\Attachment;
+use App\Models\WorkspaceMember;
 use App\Services\ChannelAccess;
+use App\Support\OpaqueId;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -81,16 +83,29 @@ class AttachmentController extends ApiController
         return response()->json(['attachment' => $attachment->present()], 201);
     }
 
-    public function show(Request $request, Attachment $attachment, ChannelAccess $access)
+    public function show(Request $request, string $attachment, ChannelAccess $access)
     {
-        $attachment->loadMissing('channel');
-        abort_unless($attachment->channel, 404);
-        $access->assertCanView($attachment->channel, $request->user());
+        $id = OpaqueId::decode($attachment);
+        abort_unless($id !== null, 404);
 
-        abort_unless(Storage::disk($attachment->disk)->exists($attachment->path), 404);
+        $model = Attachment::query()->with('channel')->find($id);
+        abort_unless($model && $model->channel, 404);
 
-        $inline = $attachment->kind() !== 'file' || $attachment->mime_type === 'application/pdf';
-        $etag = '"'.sha1($attachment->id.'|'.$attachment->path.'|'.$attachment->updated_at).'"';
+        // An attachment only exists for people inside the workspace that owns it.
+        // Without this, a member of any other workspace could enumerate files on
+        // public channels because `assertCanView` short-circuits for open channels.
+        $member = WorkspaceMember::query()
+            ->where('workspace_id', $model->channel->workspace_id)
+            ->where('user_id', $request->user()->id)
+            ->exists();
+        abort_unless($member, 404);
+
+        $access->assertCanView($model->channel, $request->user());
+
+        abort_unless(Storage::disk($model->disk)->exists($model->path), 404);
+
+        $inline = $model->kind() !== 'file' || $model->mime_type === 'application/pdf';
+        $etag = '"'.sha1($model->id.'|'.$model->path.'|'.$model->updated_at).'"';
 
         if ($request->headers->get('If-None-Match') === $etag) {
             return response('', 304, [
@@ -99,12 +114,12 @@ class AttachmentController extends ApiController
             ]);
         }
 
-        return Storage::disk($attachment->disk)->response(
-            $attachment->path,
-            $attachment->original_name,
+        return Storage::disk($model->disk)->response(
+            $model->path,
+            $model->original_name,
             [
-                'Content-Type' => $attachment->mime_type,
-                'Content-Disposition' => ($inline ? 'inline' : 'attachment').'; filename="'.addslashes($attachment->original_name).'"',
+                'Content-Type' => $model->mime_type,
+                'Content-Disposition' => ($inline ? 'inline' : 'attachment').'; filename="'.addslashes($model->original_name).'"',
                 'X-Content-Type-Options' => 'nosniff',
                 'Cache-Control' => 'private, max-age=604800, immutable',
                 'ETag' => $etag,

@@ -222,11 +222,15 @@ class MessageWriter
 
     private function notify(Channel $channel, User $author, Message $message, string $excerpt): void
     {
-        try {
-            app(WebPushNotifier::class)->notify($channel, $author, $message, $excerpt);
-        } catch (Throwable $exception) {
-            report($exception);
-        }
+        // Push fan-out can take seconds. Send it after the response so posting a
+        // message never waits on a phone's push service.
+        defer(function () use ($channel, $author, $message, $excerpt): void {
+            try {
+                app(WebPushNotifier::class)->notify($channel, $author, $message, $excerpt);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        });
     }
 
     private function parent(Channel $channel, ?int $parentId): ?Message

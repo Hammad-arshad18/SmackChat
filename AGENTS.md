@@ -82,3 +82,11 @@ php artisan test --filter=Name
 ```
 
 Serve is often `127.0.0.1:8001` when `:8000` is another app. Vite is port 5173. Seed: Northwind Studio. `ada@northwind.test` owner, `lin@northwind.test` admin, `grace@northwind.test` member. Password `password`. Timezone Asia/Dubai.
+
+## Production ops
+
+- `PRODUCTION.md` is the launch checklist. Read it before the first customer.
+- Cron: `* * * * * php artisan schedule:run` runs history pruning, audit retention, and `smackchat:backup` (dump + files in `storage/app/backups`). Copy that directory off-site.
+- No trusted proxy by default. Add real proxy IPs in `bootstrap/app.php`; never `'*'` (office presence and rate limits read the client IP).
+- `SECURITY`: password reset at `/api/forgot-password` and `/api/reset-password`; account export/delete at `/api/me/export` and `DELETE /api/me`; audit at `GET /api/workspaces/{slug}/audit` (owner/admin).
+- Tests: `SecurityTest` covers proxy spoofing, login lockout, reset, Ably capability, audit, export, deletion, backup, health.

@@ -6,6 +6,7 @@ use App\Models\AttendanceDay;
 use App\Services\AblyPublisher;
 use App\Services\AttendanceService;
 use App\Services\AttendanceWorkbook;
+use App\Services\AuditLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
@@ -85,7 +86,7 @@ class AttendanceController extends ApiController
         ]);
     }
 
-    public function export(Request $request, AttendanceWorkbook $workbook)
+    public function export(Request $request, AttendanceWorkbook $workbook, AuditLogger $audit)
     {
         $this->requireManager($request);
         [$start, $end] = $this->range($request);
@@ -93,6 +94,11 @@ class AttendanceController extends ApiController
         $rows = $this->query($request, $start, $end)->get();
         $filename = 'attendance-'.$workspace->slug.'-'.$start->format('Y-m').'.xlsx';
         $bytes = $workbook->render($workspace, $start, $end, $rows);
+
+        $audit->record('attendance.exported', $workspace, $request->user(), [
+            'month' => $start->format('Y-m'),
+            'rows' => $rows->count(),
+        ], null, $request);
 
         return response()->streamDownload(function () use ($bytes) {
             echo $bytes;
