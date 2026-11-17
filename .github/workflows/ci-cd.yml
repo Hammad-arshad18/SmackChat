@@ -124,6 +124,19 @@ jobs:
           node-version: "22"
           cache: npm
 
+      - name: Verify Linux native binaries in the lockfile
+        run: |
+          node -e "
+          const packages = require('./package-lock.json').packages;
+          const required = ['@rollup/rollup-linux-x64-gnu', '@esbuild/linux-x64'];
+          const missing = required.filter((name) => !packages['node_modules/' + name]);
+          if (missing.length) {
+            console.error('Missing from package-lock.json: ' + missing.join(', '));
+            console.error('Regenerate it with: rm package-lock.json && npm install --package-lock-only --os=linux --cpu=x64 --libc=glibc');
+            process.exit(1);
+          }
+          "
+
       - name: Install npm dependencies
         run: npm ci
 

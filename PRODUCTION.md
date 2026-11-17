@@ -53,6 +53,11 @@ business decisions that cannot live in the repository. Work top to bottom.
 
 - `php artisan test` (SQLite) and the `Migrate on MySQL 8` CI job must be green.
 - `php vendor/bin/pint --test`, `composer audit`, `npm audit --omit=dev`.
+- After changing JS dependencies, regenerate the lock so CI gets the Linux
+  native binaries (Rollup, esbuild, Tailwind oxide, lightningcss):
+  `rm package-lock.json && npm install --package-lock-only --os=linux --cpu=x64 --libc=glibc`
+  then `npm ci && npm run build`. A lock generated with a plain `npm install`
+  on macOS drops those packages and breaks the Linux build.
 - Smoke-test the composer after a Tiptap upgrade: send a message with bold,
   italic, underline, a list, a link, an @mention, and an emoji.
 - Attachments are opaque-linked (`/api/attachments/v1.…`); numeric ids return
