@@ -8,25 +8,24 @@
  * The worker loads exactly one model, chosen by `ai.js` and sent in `init`. When a
  * model cannot start (ONNX `std::bad_alloc`, no WebGPU, …) the page terminates this
  * worker and starts a fresh one for the next candidate: a new worker gets a clean
- * WASM heap, so one failed session cannot break the next attempt.
+ * WASM heap, so one failed session cannot break the next attempt. The page also
+ * terminates an idle worker on phones; WASM memory never shrinks, so ending the
+ * worker is the only way to give the memory back.
  */
-
-const IOS_IDLE_DISPOSE_MS = 60000;
 
 const FALLBACK_MODEL = {
     id: 'onnx-community/SmolLM2-360M-Instruct-ONNX',
     label: 'SmolLM2 360M',
 };
 
-let device = { isIos: false };
+let device = { isIos: false, isMobile: false };
 let spec = null;
 let transformers = null;
 let activePipeline = null;
 let loadingPromise = null;
-let idleTimer = null;
-let activeRequests = 0;
 let loadingLabel = FALLBACK_MODEL.label;
 const fileProgress = new Map();
+let lastPercent = 0;
 
 function post(message) {
     self.postMessage(message);
@@ -37,7 +36,7 @@ function messageFor(error) {
 }
 
 function activeSpec() {
-    return spec || { modelId: FALLBACK_MODEL.id, modelLabel: FALLBACK_MODEL.label, device: 'wasm' };
+    return spec || { modelId: FALLBACK_MODEL.id, modelLabel: FALLBACK_MODEL.label, device: 'wasm', dtype: 'q8' };
 }
 
 function isSafari() {
@@ -57,6 +56,12 @@ function reportProgress(info) {
         return;
     }
 
+    // Count only the weights. Config and tokenizer files finish first and would show
+    // 100% before the real download starts, then the bar would drop back to 0%.
+    if (!/\.onnx(_data(_\d+)?)?$/i.test(info.file)) {
+        return;
+    }
+
     fileProgress.set(info.file, {
         loaded: Number(info.loaded) || 0,
         total: Number(info.total) || 0,
@@ -71,10 +76,11 @@ function reportProgress(info) {
     }
 
     const percent = total > 0 ? Math.round((loaded / total) * 100) : 0;
+    lastPercent = Math.max(lastPercent, Math.min(99, percent));
 
     post({
         type: 'download-progress',
-        percent: Math.max(0, Math.min(100, percent)),
+        percent: lastPercent,
         statusText: `Fetching ${loadingLabel} model files…`,
     });
 }
@@ -127,9 +133,9 @@ async function buildPipeline() {
     transformers.env.allowLocalModels = false;
     transformers.env.useBrowserCache = true;
 
-    // Safari and Firefox keep a tighter lid on worker memory than Chrome; one wasm thread
-    // avoids multiplying the buffers a single session needs.
-    if (device.isIos || isSafari() || isFirefox()) {
+    // Phones, Safari, and Firefox keep a tighter lid on worker memory than desktop
+    // Chrome; one wasm thread avoids multiplying the buffers a single session needs.
+    if (device.isMobile || device.isIos || isSafari() || isFirefox()) {
         try {
             transformers.env.backends.onnx.wasm.numThreads = 1;
         } catch {
@@ -140,9 +146,12 @@ async function buildPipeline() {
     const active = activeSpec();
     loadingLabel = active.modelLabel;
     fileProgress.clear();
+    lastPercent = 0;
 
     const options = {
-        dtype: active.device === 'webgpu' ? await webgpuDtype() : 'q4',
+        dtype: active.device === 'webgpu'
+            ? (active.dtype === 'q4f16' ? await webgpuDtype() : active.dtype || 'q4')
+            : active.dtype || 'q8',
         device: active.device,
         progress_callback: reportProgress,
     };
@@ -165,7 +174,6 @@ async function buildPipeline() {
     activePipeline = await transformers.pipeline('text-generation', active.modelId, options);
 
     post({ type: 'download-complete' });
-    scheduleIdleDispose();
 
     if (active.device === 'webgpu') {
         // Fire and forget: generation calls queue behind it, but the badge turns ready now.
@@ -175,34 +183,7 @@ async function buildPipeline() {
     return activePipeline;
 }
 
-function scheduleIdleDispose() {
-    if (!device.isIos) {
-        return;
-    }
-
-    clearTimeout(idleTimer);
-    idleTimer = null;
-
-    if (activeRequests > 0 || loadingPromise) {
-        return;
-    }
-
-    idleTimer = setTimeout(() => {
-        idleTimer = null;
-
-        if (activeRequests > 0 || loadingPromise) {
-            scheduleIdleDispose();
-            return;
-        }
-
-        disposePipeline();
-    }, IOS_IDLE_DISPOSE_MS);
-}
-
 async function disposePipeline() {
-    clearTimeout(idleTimer);
-    idleTimer = null;
-
     const pipeline = activePipeline;
     activePipeline = null;
     fileProgress.clear();
@@ -227,62 +208,54 @@ function clampTokens(value) {
 }
 
 async function generate({ requestId, messages, maxNewTokens, maxChars }) {
-    activeRequests += 1;
-    clearTimeout(idleTimer);
-    idleTimer = null;
+    const pipeline = await loadPipeline();
+    const { TextStreamer } = transformers;
+    const cap = Number(maxChars) || 6000;
+    const trimmed = (Array.isArray(messages) ? messages : []).map((message) => {
+        const content = String(message?.content ?? '');
+        const bounded = content.length > cap ? content.slice(content.length - cap) : content;
 
-    try {
-        const pipeline = await loadPipeline();
-        const { TextStreamer } = transformers;
-        const cap = Number(maxChars) || 6000;
-        const trimmed = (Array.isArray(messages) ? messages : []).map((message) => {
-            const content = String(message?.content ?? '');
-            const bounded = content.length > cap ? content.slice(content.length - cap) : content;
+        return { role: message?.role === 'system' ? 'system' : 'user', content: bounded };
+    });
 
-            return { role: message?.role === 'system' ? 'system' : 'user', content: bounded };
-        });
+    let streamed = '';
+    const streamer = new TextStreamer(pipeline.tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function: (text) => {
+            if (!text) {
+                return;
+            }
 
-        let streamed = '';
-        const streamer = new TextStreamer(pipeline.tokenizer, {
-            skip_prompt: true,
-            skip_special_tokens: true,
-            callback_function: (text) => {
-                if (!text) {
-                    return;
-                }
+            streamed += text;
+            post({ type: 'chunk', requestId, text });
+        },
+    });
 
-                streamed += text;
-                post({ type: 'chunk', requestId, text });
-            },
-        });
+    const output = await pipeline(trimmed, {
+        max_new_tokens: clampTokens(maxNewTokens),
+        do_sample: false,
+        streamer,
+    });
 
-        const output = await pipeline(trimmed, {
-            max_new_tokens: clampTokens(maxNewTokens),
-            do_sample: false,
-            streamer,
-        });
+    const generated = output?.[0]?.generated_text;
+    const text = Array.isArray(generated)
+        ? String(generated.at(-1)?.content || '')
+        : String(generated || '');
 
-        const generated = output?.[0]?.generated_text;
-        const text = Array.isArray(generated)
-            ? String(generated.at(-1)?.content || '')
-            : String(generated || '');
-
-        post({ type: 'done', requestId, text: (text || streamed).trim() });
-    } finally {
-        activeRequests = Math.max(0, activeRequests - 1);
-        scheduleIdleDispose();
-    }
+    post({ type: 'done', requestId, text: (text || streamed).trim() });
 }
 
 self.addEventListener('message', async (event) => {
     const data = event.data || {};
 
     if (data.type === 'init') {
-        device = { isIos: !!data.isIos };
+        device = { isIos: !!data.isIos, isMobile: !!data.isMobile };
         spec = {
             modelId: String(data.modelId || FALLBACK_MODEL.id),
             modelLabel: String(data.modelLabel || FALLBACK_MODEL.label),
             device: data.device === 'webgpu' ? 'webgpu' : 'wasm',
+            dtype: ['q4', 'q4f16', 'q8'].includes(data.dtype) ? data.dtype : null,
         };
         return;
     }
