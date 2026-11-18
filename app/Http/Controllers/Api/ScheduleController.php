@@ -7,6 +7,7 @@ use App\Services\AuditLogger;
 use App\Services\ScheduleInspector;
 use App\Support\OfficeNetwork;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -17,6 +18,10 @@ class ScheduleController extends ApiController
         $workspace = $this->workspace($request);
         $timesheet = $workspace->channels()->where('type', 'attendance')->with('members:id,name,avatar_color,avatar_path,updated_at')->first();
 
+        $local = now()->timezone($workspace->timezone);
+        $weekStart = $local->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
+        $weekEnd = $weekStart->copy()->addDays(6);
+
         return response()->json([
             'schedule' => [
                 'timezone' => $workspace->timezone,
@@ -26,6 +31,9 @@ class ScheduleController extends ApiController
                 'window_minutes' => $workspace->windowMinutes(),
                 'standard_day_minutes' => $workspace->standardDayMinutes(),
                 'work_days' => array_map('intval', $workspace->work_days ?? []),
+                'week_starts_on' => $weekStart->toDateString(),
+                'week_ends_on' => $weekEnd->toDateString(),
+                'week_expected_minutes' => $inspector->workingDays($workspace, $weekStart, $weekEnd) * $workspace->standardDayMinutes(),
                 'location_restricted' => (bool) $workspace->location_restricted,
                 'location_latitude' => $workspace->location_latitude,
                 'location_longitude' => $workspace->location_longitude,

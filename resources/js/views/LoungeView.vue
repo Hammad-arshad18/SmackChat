@@ -83,7 +83,15 @@ const weekOvertime = computed(() => weekDays.value.reduce((total, date) => {
 }, 0));
 const weekDaysWorked = computed(() => weekDays.value.filter((date) => minutesFor(date) > 0).length);
 const monthMinutes = computed(() => myRows.value.reduce((total, row) => total + (row.work_minutes || 0), 0) + (office.today && office.today.status !== 'completed' ? liveWorkMinutes.value : 0));
-const expectedWeekMinutes = computed(() => (office.workspace?.work_days?.length || 5) * standardMinutes.value);
+const expectedWeekMinutes = computed(() => {
+    const fromSchedule = schedule.value?.week_expected_minutes;
+
+    if (fromSchedule != null) {
+        return fromSchedule;
+    }
+
+    return (office.workspace?.work_days?.length || 5) * standardMinutes.value;
+});
 const weekProgress = computed(() => Math.min(100, Math.round((weekMinutes.value / expectedWeekMinutes.value) * 100)));
 const weekMax = computed(() => Math.max(standardMinutes.value, ...weekDays.value.map((date) => minutesFor(date))));
 const barHeight = (date) => {

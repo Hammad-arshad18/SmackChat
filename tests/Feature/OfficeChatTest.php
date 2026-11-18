@@ -1056,6 +1056,205 @@ class OfficeChatTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_this_weeks_target_drops_a_standard_day_for_each_holiday_in_the_week(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-18 05:00:00', 'UTC'));
+
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Planning day',
+            'observed_on' => '2026-11-23',
+        ])->assertCreated();
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Team day',
+            'observed_on' => '2026-11-24',
+        ])->assertCreated();
+
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/schedule")
+            ->assertOk()
+            ->assertJsonPath('schedule.week_starts_on', '2026-11-16')
+            ->assertJsonPath('schedule.week_ends_on', '2026-11-22')
+            ->assertJsonPath('schedule.week_expected_minutes', 2400);
+
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Thursday off',
+            'observed_on' => '2026-11-19',
+        ])->assertCreated();
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Friday off',
+            'observed_on' => '2026-11-20',
+        ])->assertCreated();
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Weekend marker',
+            'observed_on' => '2026-11-21',
+        ])->assertCreated();
+
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/schedule")
+            ->assertOk()
+            ->assertJsonPath('schedule.week_expected_minutes', 1440);
+
+        $sheets = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+        $this->assertSame(17, $sheets['Summary'][3][1]);
+        $this->assertEqualsWithDelta(136.0, $sheets['Summary'][4][1], 0.001);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_six_day_week_drops_sixteen_hours_for_two_holidays_in_the_week_and_month(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        Carbon::setTestNow(Carbon::parse('2026-11-18 05:00:00', 'UTC'));
+
+        $this->actingAs($owner, 'sanctum')->putJson("/api/workspaces/{$workspace->slug}/schedule", [
+            'timezone' => 'Asia/Dubai',
+            'work_start' => '09:00',
+            'work_end' => '18:00',
+            'break_allowance_minutes' => 60,
+            'work_days' => [1, 2, 3, 4, 5, 6],
+        ])
+            ->assertOk()
+            ->assertJsonPath('schedule.standard_day_minutes', 480)
+            ->assertJsonPath('schedule.week_expected_minutes', 2880);
+
+        $before = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+        $this->assertSame(25, $before['Summary'][3][1]);
+        $this->assertEqualsWithDelta(200.0, $before['Summary'][4][1], 0.001);
+
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Thursday off',
+            'observed_on' => '2026-11-19',
+        ])->assertCreated();
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Saturday off',
+            'observed_on' => '2026-11-21',
+        ])->assertCreated();
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Sunday',
+            'observed_on' => '2026-11-22',
+        ])->assertCreated();
+
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/schedule")
+            ->assertOk()
+            ->assertJsonPath('schedule.week_expected_minutes', 1920);
+
+        $after = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+        $this->assertSame(23, $after['Summary'][3][1]);
+        $this->assertEqualsWithDelta(184.0, $after['Summary'][4][1], 0.001);
+
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-18 09:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-18 10:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_out'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-18 14:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertOk()
+            ->assertJsonPath('day.work_minutes', 480)
+            ->assertJsonPath('day.regular_minutes', 480)
+            ->assertJsonPath('day.overtime_minutes', 0)
+            ->assertJsonPath('day.holiday_name', null);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_holiday_and_non_working_shifts_are_overtime_on_a_six_day_week(): void
+    {
+        $owner = $this->openOffice();
+        $workspace = $owner->currentWorkspace;
+
+        $this->actingAs($owner, 'sanctum')->putJson("/api/workspaces/{$workspace->slug}/schedule", [
+            'timezone' => 'Asia/Dubai',
+            'work_start' => '09:00',
+            'work_end' => '18:00',
+            'break_allowance_minutes' => 60,
+            'work_days' => [1, 2, 3, 4, 5, 6],
+        ])->assertOk();
+
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/holidays", [
+            'name' => 'Thursday off',
+            'observed_on' => '2026-11-19',
+        ])->assertCreated();
+
+        Carbon::setTestNow(Carbon::parse('2026-11-19 05:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/schedule")
+            ->assertOk()
+            ->assertJsonPath('schedule.week_expected_minutes', 2400);
+
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-19 09:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-19 10:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'break_out'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-19 14:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertOk()
+            ->assertJsonPath('day.holiday_name', 'Thursday off')
+            ->assertJsonPath('day.non_working_day', false)
+            ->assertJsonPath('day.work_minutes', 480)
+            ->assertJsonPath('day.break_minutes', 60)
+            ->assertJsonPath('day.regular_minutes', 0)
+            ->assertJsonPath('day.overtime_minutes', 480);
+
+        $holidayNote = $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/channels/timesheets/messages")
+            ->assertOk()
+            ->json('messages.0.text');
+        $this->assertStringContainsString('8h of that is overtime on an off day', (string) $holidayNote);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-22 05:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-22 08:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertOk()
+            ->assertJsonPath('day.non_working_day', true)
+            ->assertJsonPath('day.holiday_name', null)
+            ->assertJsonPath('day.work_minutes', 180)
+            ->assertJsonPath('day.regular_minutes', 0)
+            ->assertJsonPath('day.overtime_minutes', 180);
+
+        Carbon::setTestNow(Carbon::parse('2026-11-21 05:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])->assertOk();
+        Carbon::setTestNow(Carbon::parse('2026-11-21 09:00:00', 'UTC'));
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_out'])
+            ->assertOk()
+            ->assertJsonPath('day.non_working_day', false)
+            ->assertJsonPath('day.holiday_name', null)
+            ->assertJsonPath('day.work_minutes', 240)
+            ->assertJsonPath('day.regular_minutes', 240)
+            ->assertJsonPath('day.overtime_minutes', 0);
+
+        $sheets = $this->workbook($this->actingAs($owner, 'sanctum')
+            ->get("/api/workspaces/{$workspace->slug}/attendance/export?month=2026-11"));
+        $thursday = $this->attendanceLine($sheets['Attendance'], 'ada@northwind.test', '2026-11-19');
+        $this->assertEqualsWithDelta(8.0, $thursday[6], 0.001);
+        $this->assertEqualsWithDelta(0.0, $thursday[7], 0.001);
+        $this->assertEqualsWithDelta(8.0, $thursday[8], 0.001);
+        $this->assertEqualsWithDelta(1.0, $thursday[9], 0.001);
+        $sunday = $this->attendanceLine($sheets['Attendance'], 'ada@northwind.test', '2026-11-22');
+        $this->assertEqualsWithDelta(3.0, $sunday[6], 0.001);
+        $this->assertEqualsWithDelta(0.0, $sunday[7], 0.001);
+        $this->assertEqualsWithDelta(3.0, $sunday[8], 0.001);
+        $this->assertSame(24, $sheets['Summary'][3][1]);
+        $this->assertEqualsWithDelta(192.0, $sheets['Summary'][4][1], 0.001);
+
+        Carbon::setTestNow();
+    }
+
     public function test_hours_past_eight_are_overtime_after_breaks(): void
     {
         $owner = $this->openOffice();
