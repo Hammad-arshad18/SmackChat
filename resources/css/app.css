@@ -7144,13 +7144,13 @@ kbd {
         min-width: 0;
         max-width: 100%;
     }
+    /* Wrap instead of squeezing: a no-wrap row shrank every button to ~13px on phones. */
     .thread-composer .composer-toolbar {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        scrollbar-width: none;
+        flex-wrap: wrap;
+        row-gap: 2px;
     }
-    .thread-composer .composer-toolbar::-webkit-scrollbar {
-        display: none;
+    .thread-composer .composer-toolbar > * {
+        flex-shrink: 0;
     }
     .thread-composer .composer-hint {
         display: none;
