@@ -15,6 +15,7 @@ class Workspace extends Model
         'logo_path',
         'owner_id',
         'timezone',
+        'ably_key',
         'work_start',
         'work_end',
         'break_allowance_minutes',
@@ -29,10 +30,15 @@ class Workspace extends Model
         'plan_activated_at',
     ];
 
+    protected $hidden = [
+        'ably_key',
+    ];
+
     protected function casts(): array
     {
         return [
             'work_days' => 'array',
+            'ably_key' => 'encrypted',
             'break_allowance_minutes' => 'integer',
             'location_restricted' => 'boolean',
             'location_latitude' => 'float',
@@ -78,6 +84,38 @@ class Workspace extends Model
     public function retainsForever(): bool
     {
         return $this->plan === 'archive';
+    }
+
+    public function ablyKey(): ?string
+    {
+        $key = $this->ably_key;
+
+        return is_string($key) && trim($key) !== '' ? trim($key) : null;
+    }
+
+    public function usesOwnAblyKey(): bool
+    {
+        return $this->ablyKey() !== null;
+    }
+
+    public function maskedAblyKey(): ?string
+    {
+        $key = $this->ablyKey();
+
+        if (! $key) {
+            return null;
+        }
+
+        $secret = str_contains($key, ':') ? substr($key, strrpos($key, ':') + 1) : $key;
+
+        return '••••'.substr($secret, -4);
+    }
+
+    public function callLimit(): int
+    {
+        return $this->plan === 'archive'
+            ? max(2, (int) config('smackchat.call_group_limit', 8))
+            : 2;
     }
 
     public function logoUrl(): ?string

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\Workspace;
+use App\Services\AblyPublisher;
 use App\Services\AuditLogger;
 use App\Services\WorkspaceProvisioner;
 use Illuminate\Http\Request;
@@ -34,7 +35,7 @@ class WorkspaceController extends ApiController
         return response()->json(['slug' => $workspace->slug], 201);
     }
 
-    public function show(Request $request)
+    public function show(Request $request, AblyPublisher $ably)
     {
         $workspace = $this->workspace($request);
         $seats = $workspace->members()->count();
@@ -64,6 +65,12 @@ class WorkspaceController extends ApiController
                 'location_radius_m' => (int) ($workspace->location_radius_m ?? 250),
                 'location_allowed_ips' => array_values($workspace->location_allowed_ips ?? []),
                 'plan_activated_at' => optional($workspace->plan_activated_at)?->toIso8601String(),
+                'realtime' => $ably->status($workspace),
+                'calls' => [
+                    'limit' => $workspace->callLimit(),
+                    'group_enabled' => $workspace->plan === 'archive',
+                    'ice_servers' => config('smackchat.call_ice_servers', []),
+                ],
             ],
         ]);
     }
@@ -85,7 +92,7 @@ class WorkspaceController extends ApiController
             'after' => $data,
         ], $workspace, $request);
 
-        return $this->show($request);
+        return $this->show($request, app(AblyPublisher::class));
     }
 
     public function updateLogo(Request $request, AuditLogger $audit)
@@ -104,7 +111,7 @@ class WorkspaceController extends ApiController
 
         $audit->record('workspace.logo_changed', $workspace, $request->user(), [], $workspace, $request);
 
-        return $this->show($request);
+        return $this->show($request, app(AblyPublisher::class));
     }
 
     public function destroyLogo(Request $request, AuditLogger $audit)
@@ -116,7 +123,7 @@ class WorkspaceController extends ApiController
 
         $audit->record('workspace.logo_removed', $workspace, $request->user(), [], $workspace, $request);
 
-        return $this->show($request);
+        return $this->show($request, app(AblyPublisher::class));
     }
 
     public function logo(Request $request)

@@ -13,10 +13,23 @@ export function realtimeConnected() {
     return client !== null;
 }
 
-export function bindOffice(workspaceId, channels, userId, onMessage, onShift, onWorkspaceEvent) {
+/**
+ * Connect for one workspace. A workspace may bring its own Ably app, so the
+ * token request names the workspace; the server picks that office's key.
+ */
+export function bindOffice(workspace, channels, userId, onMessage, onShift, onWorkspaceEvent, onCallEvent) {
     stopRealtime();
 
-    ready = api.get('/realtime/token').then(({ data }) => {
+    const workspaceId = typeof workspace === 'object' ? workspace?.id : workspace;
+    const slug = typeof workspace === 'object' ? workspace?.slug : null;
+
+    if (!workspaceId) {
+        ready = Promise.resolve(false);
+
+        return ready;
+    }
+
+    ready = api.get('/realtime/token', { params: slug ? { workspace: slug } : {} }).then(({ data }) => {
         if (!data.enabled || !data.token) {
             return false;
         }
@@ -27,10 +40,7 @@ export function bindOffice(workspaceId, channels, userId, onMessage, onShift, on
         });
 
         channels.forEach((channel) => {
-            const realtime = client.channels.get(`smackchat:ws:${workspaceId}:ch:${channel.id}`);
-            const handler = (message) => onMessage(message.data);
-            realtime.subscribe('message', handler);
-            subscriptions.push(() => realtime.unsubscribe('message', handler));
+            subscribeToChannel(workspaceId, channel.id, onMessage, onCallEvent);
         });
 
         if (userId) {
@@ -49,9 +59,24 @@ export function bindOffice(workspaceId, channels, userId, onMessage, onShift, on
 
         return true;
     }).catch(() => false);
+
+    return ready;
 }
 
-export function subscribeChannel(workspaceId, channelId, onMessage) {
+function subscribeToChannel(workspaceId, channelId, onMessage, onCallEvent) {
+    const realtime = client.channels.get(`smackchat:ws:${workspaceId}:ch:${channelId}`);
+    const handler = (message) => onMessage(message.data);
+    realtime.subscribe('message', handler);
+    subscriptions.push(() => realtime.unsubscribe('message', handler));
+
+    if (onCallEvent) {
+        const callHandler = (message) => onCallEvent(channelId, message.data);
+        realtime.subscribe('call', callHandler);
+        subscriptions.push(() => realtime.unsubscribe('call', callHandler));
+    }
+}
+
+export function subscribeChannel(workspaceId, channelId, onMessage, onCallEvent) {
     if (!client) {
         return () => {};
     }
@@ -59,7 +84,19 @@ export function subscribeChannel(workspaceId, channelId, onMessage) {
     const realtime = client.channels.get(`smackchat:ws:${workspaceId}:ch:${channelId}`);
     const handler = (message) => onMessage(message.data);
     realtime.subscribe('message', handler);
-    const unsubscribe = () => realtime.unsubscribe('message', handler);
+    const callHandler = onCallEvent ? (message) => onCallEvent(channelId, message.data) : null;
+
+    if (callHandler) {
+        realtime.subscribe('call', callHandler);
+    }
+
+    const unsubscribe = () => {
+        realtime.unsubscribe('message', handler);
+
+        if (callHandler) {
+            realtime.unsubscribe('call', callHandler);
+        }
+    };
     subscriptions.push(unsubscribe);
 
     return unsubscribe;

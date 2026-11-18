@@ -137,7 +137,7 @@ export const useOfficeStore = defineStore('office', {
                 }
             }
             bindOffice(
-                this.workspace.id,
+                this.workspace,
                 this.channels,
                 userId,
                 (payload) => this.ingest(payload),
@@ -146,6 +146,9 @@ export const useOfficeStore = defineStore('office', {
                     if (event === 'member.joined' || event === 'channel.created') {
                         await Promise.all([this.refreshMembers(), this.refreshChannels()]);
                     }
+                },
+                (channelId, payload) => {
+                    window.dispatchEvent(new CustomEvent('smack-call', { detail: { channelId, ...payload } }));
                 },
             );
             watchShift(this);
@@ -228,10 +231,38 @@ export const useOfficeStore = defineStore('office', {
             if (this.workspace?.id) {
                 for (const channel of this.channels) {
                     if (!previousIds.has(channel.id)) {
-                        subscribeChannel(this.workspace.id, channel.id, (payload) => this.ingest(payload));
+                        subscribeChannel(
+                            this.workspace.id,
+                            channel.id,
+                            (payload) => this.ingest(payload),
+                            (channelId, payload) => {
+                                window.dispatchEvent(new CustomEvent('smack-call', { detail: { channelId, ...payload } }));
+                            },
+                        );
                     }
                 }
             }
+        },
+        reconnectRealtime() {
+            if (!this.workspace) {
+                return;
+            }
+
+            bindOffice(
+                this.workspace,
+                this.channels,
+                useAuthStore().user?.id,
+                (payload) => this.ingest(payload),
+                (payload) => this.applyShift(payload?.day),
+                async (event) => {
+                    if (event === 'member.joined' || event === 'channel.created') {
+                        await Promise.all([this.refreshMembers(), this.refreshChannels()]);
+                    }
+                },
+                (channelId, payload) => {
+                    window.dispatchEvent(new CustomEvent('smack-call', { detail: { channelId, ...payload } }));
+                },
+            );
         },
         async refreshMembers() {
             const { data } = await api.get(`/workspaces/${this.slug}/members`);

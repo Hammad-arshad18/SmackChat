@@ -77,5 +77,6 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('search', fn (Request $request) => Limit::perMinute(60)->by($byUser($request)));
         RateLimiter::for('exports', fn (Request $request) => Limit::perMinute(5)->by($byUser($request)));
         RateLimiter::for('presence', fn (Request $request) => Limit::perMinute(10)->by($byUser($request)));
+        RateLimiter::for('calls', fn (Request $request) => Limit::perMinute(240)->by($byUser($request)));
     }
 }

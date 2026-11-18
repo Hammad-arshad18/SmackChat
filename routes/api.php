@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\AuditController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BillingController;
+use App\Http\Controllers\Api\CallController;
 use App\Http\Controllers\Api\ChannelController;
 use App\Http\Controllers\Api\E2eController;
 use App\Http\Controllers\Api\InvitationController;
@@ -12,6 +13,7 @@ use App\Http\Controllers\Api\MemberController;
 use App\Http\Controllers\Api\MessageController;
 use App\Http\Controllers\Api\PushController;
 use App\Http\Controllers\Api\RealtimeController;
+use App\Http\Controllers\Api\RealtimeSettingsController;
 use App\Http\Controllers\Api\ScheduleController;
 use App\Http\Controllers\Api\WorkspaceController;
 use Illuminate\Support\Facades\Route;
@@ -57,6 +59,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logo', [WorkspaceController::class, 'updateLogo']);
         Route::delete('/logo', [WorkspaceController::class, 'destroyLogo']);
         Route::get('/audit', [AuditController::class, 'index']);
+        Route::put('/realtime', [RealtimeSettingsController::class, 'update']);
+        Route::delete('/realtime', [RealtimeSettingsController::class, 'destroy']);
+
+        Route::get('/calls/active', [CallController::class, 'active']);
+        Route::post('/calls', [CallController::class, 'store'])->middleware('throttle:calls');
+        Route::get('/calls/{call}', [CallController::class, 'show'])->whereNumber('call');
+        Route::post('/calls/{call}/join', [CallController::class, 'join'])->whereNumber('call')->middleware('throttle:calls');
+        Route::post('/calls/{call}/leave', [CallController::class, 'leave'])->whereNumber('call');
+        Route::post('/calls/{call}/signal', [CallController::class, 'signal'])->whereNumber('call')->middleware('throttle:calls');
+        Route::get('/calls/{call}/signals', [CallController::class, 'signals'])->whereNumber('call')->middleware('throttle:calls');
 
         Route::get('/members', [MemberController::class, 'index']);
         Route::post('/invitations', [MemberController::class, 'invite'])->middleware('throttle:presence');

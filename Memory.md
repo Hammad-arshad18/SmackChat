@@ -47,7 +47,17 @@ Register: email code, then `WorkspaceProvisioner::create`. That makes `#general`
 
 - Ably: `smackchat:ws:{workspaceId}:ch:{channelId}`, event name `message`. Reactions use `event: message.reacted` plus `actor_id` so other clients do not mark the reaction as theirs.
 - No Ably key: poll the open conversation. Still a working app.
+- A workspace can bring its own Ably key (owner, Settings → Realtime). It is encrypted at rest, and tokens are scoped to that one workspace. The server key stays the fallback.
 - Web Push needs VAPID. iOS only notifies from the installed home-screen icon. The green banner says that.
+
+## Huddles
+
+- WebRTC audio/video, one-to-one on the free `standard` plan and up to `SMACKCHAT_CALL_GROUP_LIMIT` (8) on `archive`.
+- Media is peer to peer; the server stores SDP/ICE in `call_signals` and asks Ably to publish `call` events on the conversation channel. Without Ably the same signals are polled over HTTP, so calls still connect.
+- Caller POSTs a call, joins it, and the others see a ring from `calls/active` or the Ably event. Leaving the last seat ends the call.
+- `Permissions-Policy` allows camera and microphone for the app origin. HTTPS (or localhost) is required.
+- The callee sees a full-screen ring with a Web Audio tone, a flashing tab title, and a browser notification when the tab is hidden. Ringing stops after 45 seconds; the caller gives up after 60 seconds with "No answer".
+- The call stage expands to the whole viewport (and asks the browser for full screen when it allows it).
 
 ## Time and money
 
