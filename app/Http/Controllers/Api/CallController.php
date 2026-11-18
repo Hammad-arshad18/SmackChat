@@ -76,7 +76,7 @@ class CallController extends ApiController
 
         $data = $request->validate([
             'to' => ['required', 'integer'],
-            'type' => ['required', 'in:offer,answer,candidate,refresh'],
+            'type' => ['required', 'in:offer,answer,candidate,refresh,status'],
             'payload' => ['required', 'array'],
         ]);
 

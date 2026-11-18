@@ -121,6 +121,14 @@ class CallsTest extends TestCase
             ->assertJsonCount(1, 'signals')
             ->assertJsonPath('signals.0.type', 'refresh')
             ->assertJsonPath('signals.0.from', $lin->id);
+
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/signal", [
+                'to' => $owner->id,
+                'type' => 'status',
+                'payload' => ['sharing' => true],
+            ])
+            ->assertOk();
     }
 
     public function test_outsiders_cannot_start_or_read_a_private_huddle(): void

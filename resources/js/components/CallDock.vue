@@ -17,6 +17,8 @@ const toast = useToast();
 const dock = ref(null);
 const expanded = ref(false);
 const soundBlocked = ref(false);
+const pinned = ref(null);
+const manualPin = ref(false);
 let baseTitle = '';
 let titleTimer = null;
 let titleFlip = false;
@@ -58,6 +60,74 @@ const waitingName = computed(() => {
     return calls.call?.channel_label || 'the channel';
 });
 const outgoingLabel = computed(() => (isDm.value ? `Calling ${waitingName.value}…` : `Ringing ${waitingName.value}…`));
+
+const tiles = computed(() => [
+    {
+        id: 'me',
+        name: 'You',
+        local: true,
+        video: localVideo.value,
+        share: calls.sharing,
+        stream: calls.localStream,
+        person: auth.user,
+    },
+    ...remoteList.value.map((person) => ({
+        id: person.user_id,
+        name: person.name,
+        local: false,
+        video: remoteVideo(person.user_id),
+        share: Boolean(calls.remoteSharing?.[person.user_id]),
+        stream: calls.remoteStreams[person.user_id],
+        person: personFor(person.user_id),
+    })),
+]);
+const sharer = computed(() => tiles.value.find((tile) => tile.share) || null);
+const stageMode = computed(() => expanded.value || hasVideo.value || Boolean(sharer.value));
+const focusTile = computed(() => {
+    if (manualPin.value) {
+        return tiles.value.find((tile) => tile.id === pinned.value) || null;
+    }
+
+    if (sharer.value) {
+        return sharer.value;
+    }
+
+    if (!stageMode.value) {
+        return null;
+    }
+
+    return tiles.value.find((tile) => !tile.local && tile.video)
+        || tiles.value.find((tile) => tile.video)
+        || null;
+});
+const orderedTiles = computed(() => {
+    const focus = focusTile.value;
+
+    if (!focus) {
+        return tiles.value;
+    }
+
+    return [focus, ...tiles.value.filter((tile) => tile.id !== focus.id)];
+});
+
+function togglePin(id) {
+    if (manualPin.value && pinned.value === id) {
+        manualPin.value = false;
+        pinned.value = null;
+
+        return;
+    }
+
+    pinned.value = id;
+    manualPin.value = true;
+    expanded.value = true;
+}
+
+watch(sharer, (tile) => {
+    if (tile) {
+        expanded.value = true;
+    }
+});
 
 function remoteVideo(userId) {
     const tracks = calls.remoteStreams[userId]?.getVideoTracks?.() || [];
@@ -171,6 +241,8 @@ watch(() => calls.incoming, (payload) => {
 
 watch(() => calls.inCall, (active) => {
     if (!active) {
+        pinned.value = null;
+        manualPin.value = false;
         collapse();
     }
 });
@@ -249,7 +321,7 @@ watch(() => office.slug, async (slug) => {
         v-if="calls.inCall"
         ref="dock"
         class="call-dock"
-        :class="{ expanded }"
+        :class="{ expanded, stage: stageMode }"
         role="dialog"
         :aria-label="`${kindLabel} ${noun}`"
     >
@@ -273,7 +345,7 @@ watch(() => office.slug, async (slug) => {
             </div>
         </header>
 
-        <div class="call-stage" :class="{ audio: !hasVideo, outgoing: waiting }" @pointerdown="pumpAudio">
+        <div class="call-stage" :class="{ audio: !hasVideo && !sharer, outgoing: waiting, 'has-pin': Boolean(focusTile) }" @pointerdown="pumpAudio">
             <div v-if="waiting" class="call-outgoing">
                 <span class="call-outgoing-pulse"><i class="pi pi-phone" /></span>
                 <strong>{{ outgoingLabel }}</strong>
@@ -281,29 +353,39 @@ watch(() => office.slug, async (slug) => {
             </div>
 
             <template v-else>
-                <div class="call-tile local">
-                    <CallVideo v-if="localVideo" :stream="calls.localStream" muted :mirror="calls.cameraOn && !calls.sharing" />
-                    <div v-else class="call-audio-avatar">
-                        <PersonAvatar :person="auth.user" :name="auth.user?.name" size="large" />
-                    </div>
-                    <span class="call-tile-name">
-                        You
-                        <i v-if="!calls.micOn" class="pi pi-microphone call-muted" />
-                    </span>
-                </div>
-
-                <div v-for="person in remoteList" :key="person.user_id" class="call-tile">
+                <div
+                    v-for="tile in orderedTiles"
+                    :key="tile.id"
+                    class="call-tile"
+                    :class="{ local: tile.local, share: tile.share, pinned: focusTile?.id === tile.id, film: focusTile && focusTile.id !== tile.id }"
+                >
                     <CallVideo
-                        v-if="calls.remoteStreams[person.user_id]"
-                        :stream="calls.remoteStreams[person.user_id]"
-                        :class="{ 'is-audio': !remoteVideo(person.user_id) }"
+                        v-if="tile.stream && (tile.video || !tile.local)"
+                        :stream="tile.stream"
+                        :muted="tile.local"
+                        :mirror="tile.local && calls.cameraOn && !calls.sharing"
+                        :fit="tile.share ? 'contain' : 'cover'"
+                        :class="{ 'is-audio': !tile.video }"
                         @blocked="soundBlocked = true"
                         @playing="soundBlocked = false"
                     />
-                    <div v-if="!remoteVideo(person.user_id)" class="call-audio-avatar">
-                        <PersonAvatar :person="personFor(person.user_id)" :name="person.name" size="large" />
+                    <div v-if="!tile.video" class="call-audio-avatar">
+                        <PersonAvatar :person="tile.person" :name="tile.name" :size="focusTile?.id === tile.id ? 'xlarge' : 'large'" />
                     </div>
-                    <span class="call-tile-name">{{ person.name }}</span>
+                    <button
+                        type="button"
+                        class="call-pin"
+                        :class="{ active: manualPin && pinned === tile.id }"
+                        :aria-label="manualPin && pinned === tile.id ? `Unpin ${tile.name}` : `Pin ${tile.name}`"
+                        @click.stop="togglePin(tile.id)"
+                    >
+                        <i class="pi pi-thumbtack" />
+                    </button>
+                    <span class="call-tile-name">
+                        {{ tile.name }}
+                        <i v-if="tile.local && !calls.micOn" class="pi pi-microphone call-muted" />
+                        <em v-if="tile.share">Screen</em>
+                    </span>
                 </div>
             </template>
 

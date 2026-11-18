@@ -58,6 +58,7 @@ export const useCallStore = defineStore('calls', () => {
     const micOn = ref(true);
     const cameraOn = ref(false);
     const sharing = ref(false);
+    const remoteSharing = ref({});
     const elapsed = ref(0);
     const busy = ref(false);
 
@@ -622,6 +623,10 @@ export const useCallStore = defineStore('calls', () => {
             });
         };
 
+        if (sharing.value) {
+            sendSignal(key, 'status', { sharing: true });
+        }
+
         pc.oniceconnectionstatechange = () => {
             updateConnection();
 
@@ -665,6 +670,15 @@ export const useCallStore = defineStore('calls', () => {
     async function applySignal(state, from, type, payload) {
         const pc = state.pc;
         const key = Number(from);
+
+        if (type === 'status') {
+            remoteSharing.value = {
+                ...remoteSharing.value,
+                [key]: Boolean(payload?.sharing),
+            };
+
+            return;
+        }
 
         if (type === 'refresh') {
             if (!isOfferer(key) || pc.signalingState !== 'stable') {
@@ -845,6 +859,9 @@ export const useCallStore = defineStore('calls', () => {
                 const next = { ...remoteStreams.value };
                 delete next[peerId];
                 remoteStreams.value = next;
+                const sharingNext = { ...remoteSharing.value };
+                delete sharingNext[peerId];
+                remoteSharing.value = sharingNext;
             }
         }
     }
@@ -909,6 +926,7 @@ export const useCallStore = defineStore('calls', () => {
 
         peers.clear();
         remoteStreams.value = {};
+        remoteSharing.value = {};
 
         if (screenTrack) {
             screenTrack.stop();
@@ -1065,8 +1083,10 @@ export const useCallStore = defineStore('calls', () => {
                 return;
             }
 
+            track.contentHint = 'detail';
             screenTrack = track;
             sharing.value = true;
+            announceShare(true);
             track.onended = () => {
                 if (sharing.value) {
                     stopSharing();
@@ -1080,10 +1100,17 @@ export const useCallStore = defineStore('calls', () => {
         }
     }
 
+    function announceShare(active) {
+        for (const peerId of peers.keys()) {
+            sendSignal(peerId, 'status', { sharing: active });
+        }
+    }
+
     function stopSharing() {
         const track = screenTrack;
         screenTrack = null;
         sharing.value = false;
+        announceShare(false);
 
         if (track) {
             track.onended = null;
@@ -1108,6 +1135,7 @@ export const useCallStore = defineStore('calls', () => {
         micOn,
         cameraOn,
         sharing,
+        remoteSharing,
         elapsed,
         busy,
         inCall,

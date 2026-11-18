@@ -9198,7 +9198,9 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     min-height: 132px;
 }
 
-.call-video {
+.call-tile .call-video:not(.is-audio) {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -9208,6 +9210,11 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 
 .call-video.mirror {
     transform: scaleX(-1);
+}
+
+.call-video.contain {
+    object-fit: contain;
+    background: #07090d;
 }
 
 .call-video.is-audio {
@@ -9223,10 +9230,44 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     place-items: center;
 }
 
+.call-tile.share,
+.call-dock:not(.stage) .call-tile.pinned {
+    aspect-ratio: 16 / 9;
+    background: #07090d;
+}
+
+.call-pin {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(10, 12, 16, 0.62);
+    color: #fff;
+    cursor: pointer;
+}
+
+.call-pin.active,
+.call-tile.pinned .call-pin {
+    background: var(--primary);
+}
+
+.call-tile-name em {
+    font-style: normal;
+    font-weight: 700;
+    color: #ffe08a;
+}
+
 .call-tile-name {
     position: absolute;
     left: 8px;
     bottom: 8px;
+    z-index: 2;
     max-width: calc(100% - 16px);
     display: inline-flex;
     align-items: center;
@@ -9392,6 +9433,63 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     font-size: 0.72rem;
     font-weight: 600;
     animation: call-blink 1.4s ease-in-out infinite;
+}
+
+.call-dock.stage:not(.expanded) {
+    width: min(920px, calc(100vw - 28px));
+    height: min(78vh, 740px);
+    right: 14px;
+    bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    background: #10141b;
+    border-color: #232a35;
+}
+
+.call-dock.stage .call-dock-head,
+.call-dock.stage .call-controls {
+    background: #10141b;
+    border-color: #232a35;
+}
+
+.call-dock.stage .call-dock-head strong,
+.call-dock.stage .card-kicker,
+.call-dock.stage .call-plan-note,
+.call-dock.stage .call-timer,
+.call-dock.stage .call-outgoing strong {
+    color: #f4f6f8;
+}
+
+.call-dock.stage .call-stage {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    background: #07090d;
+}
+
+.call-dock.stage .call-stage.has-pin {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 8px;
+    align-content: stretch;
+}
+
+.call-dock.stage .call-tile.pinned {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    aspect-ratio: auto;
+    min-height: 0;
+    height: 100%;
+    border-radius: 16px;
+    background: #07090d;
+}
+
+.call-dock.stage .call-tile.film {
+    height: 96px;
+    aspect-ratio: auto;
+    border-radius: 12px;
 }
 
 .call-dock.expanded {
