@@ -9,6 +9,7 @@ use App\Models\Channel;
 use App\Models\User;
 use App\Models\Workspace;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 /**
  * Live audio/video huddles. Media is peer to peer WebRTC; only the SDP/ICE
@@ -18,7 +19,10 @@ use Illuminate\Support\Facades\DB;
  */
 class CallService
 {
-    public function __construct(private AblyPublisher $ably) {}
+    public function __construct(
+        private AblyPublisher $ably,
+        private WebPushNotifier $push,
+    ) {}
 
     public function limit(Workspace $workspace): int
     {
@@ -54,6 +58,16 @@ class CallService
                 'kind' => $call->kind,
                 'started_by' => $call->started_by,
             ]);
+
+            // A closed tab cannot ring, but a push notification can bring the
+            // callee back into the app. Never let that delay the call itself.
+            defer(function () use ($call, $user): void {
+                try {
+                    app(WebPushNotifier::class)->ring($call, $user);
+                } catch (Throwable $exception) {
+                    report($exception);
+                }
+            });
 
             return $call->fresh();
         });
@@ -128,6 +142,13 @@ class CallService
     {
         abort_unless($this->isSeated($call, $user), 403, 'Join the huddle before sending signals.');
         abort_unless($this->isSeated($call, $to), 422, 'That person is no longer in the huddle.');
+
+        // TrimStrings removes the final CRLF from request strings. SDP needs it.
+        if ($type !== 'candidate' && isset($payload['sdp']) && is_string($payload['sdp'])) {
+            $payload['sdp'] = str_ends_with($payload['sdp'], "\r\n")
+                ? $payload['sdp']
+                : $payload['sdp']."\r\n";
+        }
 
         CallSignal::create([
             'call_id' => $call->id,

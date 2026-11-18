@@ -9599,3 +9599,24 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
         min-width: 0;
     }
 }
+
+.call-sound {
+    grid-column: 1 / -1;
+    justify-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 13px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.call-sound:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}

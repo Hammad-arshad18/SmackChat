@@ -1,5 +1,5 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v9';
+const CACHE = 'smack-static-v10';
 const PRECACHE = [
     '/offline.html',
     '/favicon.png',
@@ -100,11 +100,17 @@ self.addEventListener('message', (event) => {
 });
 
 function notificationOptions(payload) {
+    const isCall = Boolean(payload.call_id);
+
     return {
         body: payload.body || 'New message',
         icon: new URL('/icons/smack-192.png', self.location.origin).href,
         tag: payload.tag || `smack-${Date.now()}`,
-        data: { url: payload.url || '/app' },
+        data: { url: payload.url || '/app', call_id: payload.call_id || null },
+        // Android keeps a call notification up until it is handled. iPhone
+        // rejects unknown options, so the push handler has a plain fallback.
+        requireInteraction: isCall,
+        vibrate: isCall ? [200, 100, 200, 100, 200] : undefined,
     };
 }
 
@@ -124,13 +130,21 @@ self.addEventListener('push', (event) => {
 
     // iPhone throws if it sees unsupported options such as renotify, and it
     // drops the subscription when a push does not display a notification.
-    event.waitUntil(
-        self.registration.showNotification(title, options).catch(() => self.registration.showNotification(title, {
+    event.waitUntil((async () => {
+        if (payload.call_id) {
+            // The open tab already shows the in-app ring; do not double-alert.
+            const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+            if (windows.some((client) => client.visibilityState === 'visible')) {
+                return;
+            }
+        }
+
+        await self.registration.showNotification(title, options).catch(() => self.registration.showNotification(title, {
             body: options.body,
             tag: options.tag,
             data: options.data,
-        })),
-    );
+        }));
+    })());
 });
 
 self.addEventListener('notificationclick', (event) => {

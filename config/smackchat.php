@@ -24,4 +24,10 @@ return [
         'trim',
         explode(',', (string) env('SMACKCHAT_CALL_ICE_SERVERS', 'stun:stun.l.google.com:19302')),
     ))),
+
+    // Optional TURN relay for people behind strict NAT/firewalls. Leave blank
+    // to use STUN only. A TURN server needs long-term credentials.
+    'call_turn_url' => env('SMACKCHAT_CALL_TURN_URL'),
+    'call_turn_username' => env('SMACKCHAT_CALL_TURN_USERNAME'),
+    'call_turn_credential' => env('SMACKCHAT_CALL_TURN_CREDENTIAL'),
 ];

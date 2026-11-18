@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Mail\RegistrationCodeMail;
+use App\Models\Call;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\AblyPublisher;
+use App\Services\WebPushNotifier;
 use App\Services\WorkspaceProvisioner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -135,6 +137,38 @@ class CallsTest extends TestCase
         $this->actingAs($outsider, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}")
             ->assertForbidden();
+    }
+
+    public function test_a_new_call_rings_closed_tabs_but_joining_does_not(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $lin = $this->member($workspace, 'Lin');
+
+        $bag = new \stdClass;
+        $bag->rings = [];
+        $this->app->instance(WebPushNotifier::class, new class($bag) extends WebPushNotifier
+        {
+            public function __construct(private object $bag) {}
+
+            public function ring(Call $call, User $caller): void
+            {
+                $this->bag->rings[] = ['call' => $call->id, 'caller' => $caller->id];
+            }
+        });
+
+        $call = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->assertCreated()
+            ->json('call');
+
+        $this->assertCount(1, $bag->rings);
+        $this->assertSame($call['id'], $bag->rings[0]['call']);
+
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->assertCreated();
+
+        $this->assertCount(1, $bag->rings);
     }
 
     public function test_a_direct_call_is_labelled_with_the_other_person(): void

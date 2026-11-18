@@ -69,7 +69,7 @@ class WorkspaceController extends ApiController
                 'calls' => [
                     'limit' => $workspace->callLimit(),
                     'group_enabled' => $workspace->plan === 'archive',
-                    'ice_servers' => config('smackchat.call_ice_servers', []),
+                    'ice_servers' => $this->iceServers(),
                 ],
             ],
         ]);
@@ -151,5 +151,31 @@ class WorkspaceController extends ApiController
         if ($workspace->logo_path) {
             Storage::disk('local')->delete($workspace->logo_path);
         }
+    }
+
+    /**
+     * STUN servers help peers find a path. A TURN server relays media when a
+     * direct path is impossible; it needs a username and credential.
+     *
+     * @return list<array<string, string>>
+     */
+    private function iceServers(): array
+    {
+        $servers = array_map(
+            fn (string $url) => ['urls' => $url],
+            config('smackchat.call_ice_servers', []),
+        );
+
+        $turn = config('smackchat.call_turn_url');
+
+        if (filled($turn)) {
+            $servers[] = array_filter([
+                'urls' => (string) $turn,
+                'username' => config('smackchat.call_turn_username'),
+                'credential' => config('smackchat.call_turn_credential'),
+            ], fn ($value) => filled($value));
+        }
+
+        return $servers;
     }
 }
