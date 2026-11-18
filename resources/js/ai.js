@@ -19,6 +19,8 @@ const LOCAL_READY_KEY = 'smack.ai.localFallbackReady';
 const LOCAL_TIER_KEY = 'smack.ai.localTier';
 const LOCAL_HINT_KEY = 'smack.ai.localHint';
 const LOCAL_MODEL_KEY = 'smack.ai.localModel';
+const LOCAL_ATTEMPT_KEY = 'smack.ai.localAttempt';
+const LOCAL_BLOCKED_KEY = 'smack.ai.localBlocked';
 const LOCAL_CACHE_NAME = 'transformers-cache';
 const LOCAL_HASH_CACHE_NAME = 'experimental_transformers-hash-cache';
 const THREAD_SUMMARY_CACHE_PREFIX = 'smack.ai.threadSummary.v1.';
@@ -36,29 +38,58 @@ const DOWNLOADING = 'downloading';
 
 const GEMINI_HINT = 'Built-in Browser Model';
 
-/** Local models, largest first. Each attempt runs in a fresh worker. */
+/**
+ * Local models, largest first. Each attempt runs in a fresh worker.
+ *
+ * `bytes` is the real size of the ONNX weights for the dtype each device loads
+ * (WebGPU: q4f16, WASM: q8). Transformers.js holds the whole file in memory, writes a
+ * copy into CacheStorage, and ONNX copies it again into the WASM heap, so peak memory
+ * is roughly 2–3× this number. That is what killed phone tabs: iOS Safari and most
+ * Android phones cannot spare ~1 GB for one tab.
+ */
 const LOCAL_MODELS = {
     large: {
         id: 'onnx-community/Qwen2.5-1.5B-Instruct',
         label: 'Qwen2.5 1.5B',
-        size: '~900 MB',
+        bytes: { webgpu: 1222e6 },
     },
     small: {
         id: 'onnx-community/Qwen2.5-0.5B-Instruct',
         label: 'Qwen2.5 0.5B',
-        size: '~380 MB',
+        bytes: { webgpu: 483e6, wasm: 512e6 },
     },
     tiny: {
         id: 'onnx-community/SmolLM2-360M-Instruct-ONNX',
         label: 'SmolLM2 360M',
-        size: '~250 MB',
+        bytes: { wasm: 363e6 },
     },
     micro: {
         id: 'onnx-community/SmolLM2-135M-Instruct-ONNX',
         label: 'SmolLM2 135M',
-        size: '~180 MB',
+        bytes: { wasm: 136e6 },
     },
 };
+
+const DTYPE_FOR_DEVICE = { webgpu: 'q4f16', wasm: 'q8' };
+
+function formatBytes(bytes) {
+    return bytes >= 1e9 ? `~${(bytes / 1e9).toFixed(1)} GB` : `~${Math.round(bytes / 10e6) * 10} MB`;
+}
+
+function makeStep(model, device) {
+    const bytes = model.bytes[device] || 0;
+
+    return {
+        model: { id: model.id, label: model.label, size: formatBytes(bytes) },
+        device,
+        dtype: DTYPE_FOR_DEVICE[device],
+        bytes,
+    };
+}
+
+function stepKey(step) {
+    return step ? `${step.model.id}|${step.device}|${step.dtype}` : '';
+}
 
 /** Reactive status shared by every screen that offers on-device AI. */
 export const ai = reactive({
@@ -189,8 +220,9 @@ function detectDevice() {
     }
 
     const ua = navigator.userAgent || '';
+    // iPadOS reports a desktop Mac UA; touch points tell it apart from a real Mac.
     ai.isIos = /iPad|iPhone|iPod/i.test(ua)
-        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
     ai.isMobile = ai.isIos || /Android|Mobile|IEMobile|Opera Mini/i.test(ua);
 }
 
@@ -211,79 +243,186 @@ function hintFor(step) {
 }
 
 function isPrimaryModel(model) {
-    if (ai.isIos) {
-        return model?.id === LOCAL_MODELS.tiny.id;
-    }
+    return model?.id === fullLadder()[0]?.model.id;
+}
 
-    return ai.isMobile
-        ? model?.id === LOCAL_MODELS.small.id
-        : model?.id === LOCAL_MODELS.large.id;
+function deviceMemoryGb() {
+    const value = Number(typeof navigator !== 'undefined' ? navigator.deviceMemory : 0);
+
+    return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 /**
- * Model attempts for this browser, fastest viable first.
+ * Every model attempt for this browser, fastest viable first, before crash blocks.
  *
- * A CPU-only WASM session at 0.5B is several times slower than SmolLM2-360M, so
- * browsers without WebGPU (Firefox, Safari, older Chrome) go straight to the small
- * models. WebGPU browsers get q4f16 weights, which roughly halve generation time.
+ * Phones run WASM only. Mobile WebGPU drivers crash the GPU process or return garbage
+ * with f16 weights, and a crash there takes the whole tab down with no chance to fall
+ * back. iPhone gets the 135M model: Safari kills a tab long before the 360M weights
+ * (×3 while loading) fit. Android gets the 360M model only when the browser reports
+ * 6 GB or more of RAM.
  */
-function localLadder() {
+function fullLadder() {
     const gpu = typeof navigator !== 'undefined' && !!navigator.gpu;
     const lite = storageGet(LOCAL_TIER_KEY) === 'lite';
 
-    if (ai.isIos || !gpu || isSafariBrowser()) {
-        return [
-            { model: LOCAL_MODELS.tiny, device: 'wasm' },
-            { model: LOCAL_MODELS.micro, device: 'wasm' },
-        ];
+    if (ai.isIos) {
+        return [makeStep(LOCAL_MODELS.micro, 'wasm')];
     }
 
     if (ai.isMobile) {
-        return [
-            { model: LOCAL_MODELS.small, device: 'webgpu' },
-            { model: LOCAL_MODELS.tiny, device: 'wasm' },
-            { model: LOCAL_MODELS.micro, device: 'wasm' },
-        ];
+        return deviceMemoryGb() >= 6
+            ? [makeStep(LOCAL_MODELS.tiny, 'wasm'), makeStep(LOCAL_MODELS.micro, 'wasm')]
+            : [makeStep(LOCAL_MODELS.micro, 'wasm')];
+    }
+
+    if (!gpu || isSafariBrowser()) {
+        return [makeStep(LOCAL_MODELS.tiny, 'wasm'), makeStep(LOCAL_MODELS.micro, 'wasm')];
     }
 
     return [
-        ...(lite ? [] : [{ model: LOCAL_MODELS.large, device: 'webgpu' }]),
-        { model: LOCAL_MODELS.small, device: 'webgpu' },
-        { model: LOCAL_MODELS.small, device: 'wasm' },
-        { model: LOCAL_MODELS.tiny, device: 'wasm' },
-        { model: LOCAL_MODELS.micro, device: 'wasm' },
+        ...(lite ? [] : [makeStep(LOCAL_MODELS.large, 'webgpu')]),
+        makeStep(LOCAL_MODELS.small, 'webgpu'),
+        makeStep(LOCAL_MODELS.tiny, 'wasm'),
+        makeStep(LOCAL_MODELS.micro, 'wasm'),
     ];
 }
 
-function selectedStep() {
+/** The ladder minus any model that crashed this page before. */
+function localLadder() {
+    const blocked = blockedSteps();
+
+    return fullLadder().filter((step) => !blocked.includes(stepKey(step)));
+}
+
+/** The stored model, only when it is still a valid choice for this device. */
+function storedStep() {
     try {
         const stored = JSON.parse(storageGet(LOCAL_MODEL_KEY) || 'null');
 
-        if (stored?.id && stored?.device) {
-            return {
-                model: {
-                    id: stored.id,
-                    label: stored.label || stored.id,
-                    size: stored.size || '',
-                },
-                device: stored.device,
-            };
+        // Entries from before dtypes were stored: WebGPU already used q4f16, so those
+        // installs stay valid. Old WASM installs used q4, which is no longer loaded.
+        const dtype = stored?.dtype || (stored?.device === 'webgpu' ? 'q4f16' : '');
+
+        if (!stored?.id || !stored?.device || !dtype) {
+            return null;
         }
+
+        return localLadder().find((step) => stepKey(step) === `${stored.id}|${stored.device}|${dtype}`) || null;
     } catch {
-        /* fall through to the ladder head */
+        return null;
+    }
+}
+
+function selectedStep() {
+    return storedStep() || localLadder()[0];
+}
+
+/* ------------------------------------------------------------------ */
+/* Crash guard                                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * When a phone runs out of memory it kills the tab, not the worker, so no error ever
+ * reaches this code and the next attempt would crash the same way. Before loading or
+ * generating, the step is written to localStorage; a clean finish, navigation
+ * (`pagehide`), or the tab going to the background removes it. If the page boots and
+ * finds it still there, that model crashed the visible tab and is skipped from now on.
+ */
+
+function blockedSteps() {
+    try {
+        const list = JSON.parse(storageGet(LOCAL_BLOCKED_KEY) || '[]');
+
+        return Array.isArray(list) ? list : [];
+    } catch {
+        return [];
+    }
+}
+
+let attemptActive = null;
+
+function beginAttempt(step, phase) {
+    attemptActive = { key: stepKey(step), phase };
+    storageSet(LOCAL_ATTEMPT_KEY, JSON.stringify(attemptActive));
+}
+
+function endAttempt() {
+    attemptActive = null;
+    storageRemove(LOCAL_ATTEMPT_KEY);
+}
+
+function reconcileCrashedAttempt() {
+    let attempt = null;
+
+    try {
+        attempt = JSON.parse(storageGet(LOCAL_ATTEMPT_KEY) || 'null');
+    } catch {
+        attempt = null;
     }
 
-    return localLadder()[0];
+    storageRemove(LOCAL_ATTEMPT_KEY);
+
+    if (!attempt?.key) {
+        return;
+    }
+
+    const blocked = blockedSteps();
+
+    if (!blocked.includes(attempt.key)) {
+        blocked.push(attempt.key);
+        storageSet(LOCAL_BLOCKED_KEY, JSON.stringify(blocked));
+    }
+
+    try {
+        const stored = JSON.parse(storageGet(LOCAL_MODEL_KEY) || 'null');
+
+        if (stored && `${stored.id}|${stored.device}|${stored.dtype}` === attempt.key) {
+            storageRemove(LOCAL_READY_KEY);
+            storageRemove(LOCAL_MODEL_KEY);
+            storageRemove(LOCAL_HINT_KEY);
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
+if (typeof window !== 'undefined') {
+    // A navigation or reload is not a crash.
+    window.addEventListener('pagehide', () => storageRemove(LOCAL_ATTEMPT_KEY));
+}
+
+if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            // A phone may kill a background tab for any reason; do not blame the model.
+            storageRemove(LOCAL_ATTEMPT_KEY);
+            lastWorkerSignal = Date.now();
+
+            if (ai.isMobile && !isWorkerBusy()) {
+                stopWorker();
+            }
+
+            return;
+        }
+
+        lastWorkerSignal = Date.now();
+
+        if (attemptActive) {
+            storageSet(LOCAL_ATTEMPT_KEY, JSON.stringify(attemptActive));
+        }
+    });
 }
 
 function localModelHint() {
     const stored = storageGet(LOCAL_HINT_KEY);
 
-    if (stored) {
+    if (stored && storedStep()) {
         return stored;
     }
 
-    return hintFor(selectedStep());
+    const step = selectedStep();
+
+    return step ? hintFor(step) : '';
 }
 
 function localEngineSupported() {
@@ -321,18 +460,35 @@ async function useLocalFallback() {
     ai.downloadPercent = 0;
     ai.downloadLabel = '';
 
-    if (!localEngineSupported()) {
+    reconcileCrashedAttempt();
+
+    if (!localEngineSupported() || !localLadder().length) {
         ai.engine = UNAVAILABLE;
         ai.modelState = UNAVAILABLE;
         ai.modelSizeHint = '';
         return;
     }
 
+    // A model chosen by an older build (e.g. Qwen 0.5B on Android WebGPU) or one that
+    // has since crashed this device is no longer valid: forget it and free its space.
+    if (storageGet(LOCAL_MODEL_KEY) && !storedStep()) {
+        try {
+            const stale = JSON.parse(storageGet(LOCAL_MODEL_KEY) || 'null');
+            await pruneLocalModels([stale?.id]);
+        } catch {
+            /* ignore */
+        }
+
+        storageRemove(LOCAL_MODEL_KEY);
+        storageRemove(LOCAL_READY_KEY);
+        storageRemove(LOCAL_HINT_KEY);
+    }
+
     ai.engine = 'transformers-local';
     ai.modelSizeHint = localModelHint();
 
     const cached = await hasLocalModelCache();
-    const flagged = storageGet(LOCAL_READY_KEY) === 'true';
+    const flagged = storageGet(LOCAL_READY_KEY) === 'true' && !!storedStep();
     const enabled = storageGet(LOCAL_ENABLED_KEY) === 'true';
 
     if (flagged && !cached) {
@@ -495,6 +651,7 @@ function markLocalReady(step) {
         label: step.model.label,
         size: step.model.size,
         device: step.device,
+        dtype: step.dtype,
     }));
     storageSet(LOCAL_HINT_KEY, hintFor(step));
     storageSet(LOCAL_TIER_KEY, isPrimaryModel(step.model) ? 'full' : 'lite');
@@ -536,8 +693,52 @@ function loadLocalStep(step) {
 
     return new Promise((resolve, reject) => {
         pendingDownload = { resolve, reject };
+        lastWorkerSignal = Date.now();
+        armWatchdog();
         target.postMessage({ type: 'load' });
     });
+}
+
+async function hasCachedModel(id) {
+    if (typeof caches === 'undefined') {
+        return false;
+    }
+
+    try {
+        const cache = await caches.open(LOCAL_CACHE_NAME);
+
+        return (await cache.keys()).some((request) => request.url.includes(id) && request.url.includes('.onnx'));
+    } catch {
+        return false;
+    }
+}
+
+/** Throws when the browser clearly has no room for this model's weights. */
+async function ensureStorageFor(step) {
+    if (!step.bytes || typeof navigator === 'undefined' || !navigator.storage?.estimate) {
+        return;
+    }
+
+    if (await hasCachedModel(step.model.id)) {
+        return;
+    }
+
+    try {
+        const { quota = 0, usage = 0 } = await navigator.storage.estimate();
+
+        if (quota > 0 && quota - usage < step.bytes * 1.1) {
+            const error = new Error(
+                `Not enough browser storage for the offline model (${step.model.size} needed, ${formatBytes(Math.max(0, quota - usage))} free). Free some space on this device and try again.`,
+            );
+            error.code = 'storage';
+            throw error;
+        }
+    } catch (error) {
+        if (error?.code === 'storage') {
+            throw error;
+        }
+        /* estimate is best effort */
+    }
 }
 
 async function downloadLocal() {
@@ -559,14 +760,21 @@ async function downloadLocal() {
         setLocalLabel(0);
 
         try {
+            await ensureStorageFor(step);
+            beginAttempt(step, 'load');
             await loadLocalStep(step);
+            endAttempt();
             markLocalReady(step);
             await pruneLocalModels(failed.filter((id) => id !== step.model.id));
 
             return;
         } catch (error) {
+            endAttempt();
             lastError = error;
-            failed.push(step.model.id);
+
+            if (error?.code !== 'storage') {
+                failed.push(step.model.id);
+            }
 
             // Terminate the worker: the next candidate starts with a clean WASM heap and
             // the failed runtime stops holding onto memory.
@@ -583,6 +791,10 @@ async function downloadLocal() {
     ai.modelSizeHint = localModelHint();
 
     const reason = String(lastError?.message || 'The model could not be loaded.');
+
+    if (lastError?.code === 'storage') {
+        throw lastError;
+    }
 
     if (/bad_alloc|allocat|memory/i.test(reason)) {
         throw new Error(
@@ -651,6 +863,9 @@ export async function removeDownloadedLocalModel() {
     storageRemove(LOCAL_TIER_KEY);
     storageRemove(LOCAL_HINT_KEY);
     storageRemove(LOCAL_MODEL_KEY);
+    // Deleting the model is the explicit "start over": give crashed models another try.
+    storageRemove(LOCAL_BLOCKED_KEY);
+    storageRemove(LOCAL_ATTEMPT_KEY);
 
     ai.downloadPercent = 0;
     ai.downloadLabel = '';
@@ -684,6 +899,69 @@ let pendingDownload = null;
 let progressSink = null;
 const requests = new Map();
 
+/*
+ * Phones suspend or kill a worker without telling the page (background tab, memory
+ * pressure). Without a watchdog the promise never settles and the composer stays
+ * busy, so Send is disabled until a reload. Silence is measured only while visible.
+ */
+const LOAD_SILENCE_MS = 150000;
+const GENERATE_SILENCE_MS = 90000;
+const MOBILE_IDLE_STOP_MS = 120000;
+
+let lastWorkerSignal = Date.now();
+let watchdogTimer = null;
+let idleStopTimer = null;
+
+function isWorkerBusy() {
+    return !!pendingDownload || requests.size > 0;
+}
+
+function armWatchdog() {
+    clearTimeout(idleStopTimer);
+    idleStopTimer = null;
+
+    if (watchdogTimer) {
+        return;
+    }
+
+    watchdogTimer = setInterval(() => {
+        if (!isWorkerBusy()) {
+            clearInterval(watchdogTimer);
+            watchdogTimer = null;
+            scheduleIdleStop();
+            return;
+        }
+
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+            return;
+        }
+
+        const limit = pendingDownload ? LOAD_SILENCE_MS : GENERATE_SILENCE_MS;
+
+        if (Date.now() - lastWorkerSignal > limit) {
+            failWorker(new Error('The offline AI model stopped responding on this device. Try again.'), false);
+        }
+    }, 5000);
+}
+
+/** On a phone, free the model's memory when it has not been used for a while. */
+function scheduleIdleStop() {
+    clearTimeout(idleStopTimer);
+    idleStopTimer = null;
+
+    if (!ai.isMobile || !worker) {
+        return;
+    }
+
+    idleStopTimer = setTimeout(() => {
+        idleStopTimer = null;
+
+        if (!isWorkerBusy()) {
+            stopWorker();
+        }
+    }, MOBILE_IDLE_STOP_MS);
+}
+
 function ensureWorker(step) {
     if (worker && !step) {
         return worker;
@@ -696,6 +974,10 @@ function ensureWorker(step) {
 
     workerStep = step || selectedStep();
 
+    if (!workerStep) {
+        throw downloadRequiredError();
+    }
+
     worker = new Worker(new URL('./workers/ai.worker.js', import.meta.url), { type: 'module' });
     worker.addEventListener('message', onWorkerMessage);
     worker.addEventListener('error', onWorkerError);
@@ -704,13 +986,18 @@ function ensureWorker(step) {
         modelId: workerStep.model.id,
         modelLabel: workerStep.model.label,
         device: workerStep.device,
+        dtype: workerStep.dtype,
         isIos: ai.isIos,
+        isMobile: ai.isMobile,
     });
 
     return worker;
 }
 
 function stopWorker() {
+    clearTimeout(idleStopTimer);
+    idleStopTimer = null;
+
     if (!worker) {
         return;
     }
@@ -743,6 +1030,7 @@ function settleRequest(requestId, settle) {
 
 function onWorkerMessage(event) {
     const data = event.data || {};
+    lastWorkerSignal = Date.now();
 
     if (data.type === 'download-progress') {
         const percent = clampPercent(data.percent);
@@ -822,7 +1110,18 @@ function invalidateReadyModel() {
 }
 
 function onWorkerError(event) {
-    const error = new Error(event?.message || 'The offline AI worker stopped unexpectedly.');
+    failWorker(new Error(event?.message || 'The offline AI worker stopped unexpectedly.'), true);
+}
+
+/**
+ * Tear down a worker that crashed or went silent, and reject everything waiting on it.
+ * `invalidate` drops the ready flag; a silent (suspended) worker keeps it, because the
+ * model files are still cached and a fresh worker can load them.
+ */
+function failWorker(error, invalidate) {
+    clearInterval(watchdogTimer);
+    watchdogTimer = null;
+    endAttempt();
 
     const target = worker;
     worker = null;
@@ -840,7 +1139,9 @@ function onWorkerError(event) {
     requests.clear();
     progressSink = null;
 
-    invalidateReadyModel();
+    if (invalidate) {
+        invalidateReadyModel();
+    }
 }
 
 function localInputCap() {
@@ -879,9 +1180,20 @@ function runLocal({ system, user, fromEnd = false, maxTokens }, { onChunk, onDow
         return Promise.reject(downloadRequiredError());
     }
 
-    const target = ensureWorker();
+    let target;
+
+    try {
+        target = ensureWorker();
+    } catch (error) {
+        return Promise.reject(error);
+    }
+
     const requestId = ++requestSeq;
     const cap = localInputCap();
+
+    if (workerStep) {
+        beginAttempt(workerStep, 'generate');
+    }
 
     return new Promise((resolve, reject) => {
         progressSink = onDownloadProgress || null;
@@ -889,9 +1201,18 @@ function runLocal({ system, user, fromEnd = false, maxTokens }, { onChunk, onDow
         requests.set(requestId, {
             text: '',
             onChunk,
-            resolve: (text) => resolve(text),
-            reject: (error) => reject(error),
+            resolve: (text) => {
+                endAttempt();
+                resolve(text);
+            },
+            reject: (error) => {
+                endAttempt();
+                reject(error);
+            },
         });
+
+        lastWorkerSignal = Date.now();
+        armWatchdog();
 
         target.postMessage({
             type: 'generate',
@@ -1190,6 +1511,38 @@ function cleanOutput(text) {
     return value;
 }
 
+/**
+ * The small phone models often repeat lines of the system prompt after the answer
+ * ("Keep the meaning. Never invent facts."), sometimes paraphrased. Remove every
+ * instruction sentence that shows up verbatim, then any trailing sentences that read
+ * like an instruction to the model.
+ */
+function stripEchoedInstructions(text, system) {
+    let value = String(text || '');
+    const sentences = String(system || '')
+        .split(/(?<=[.!?])\s+/)
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => sentence.length > 12);
+
+    for (const sentence of sentences) {
+        value = value.split(sentence).join('');
+    }
+
+    const instructionTail = /(?:^|(?<=[.!?\n]))\s*(?:Keep (?:about|roughly|the (?:same|meaning|existing|tone)|@mentions|it)|Never invent|Return (?:only|ONLY)|Preserve @mentions|Do not invent|Make it (?:shorter|longer)|Use (?:a [^.!?\n]*tone|only information)|Add a little more clarity)\b[^.!?\n]*[.!?]?\s*$/;
+
+    for (let guard = 0; guard < 8 && instructionTail.test(value); guard += 1) {
+        const next = value.replace(instructionTail, '');
+
+        if (!next.trim()) {
+            break;
+        }
+
+        value = next;
+    }
+
+    return value.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 async function executeTask({ kind, options, instruction, tokens, hooks }) {
     if (ai.engine === UNAVAILABLE) {
         throw new Error('On-device AI is unavailable in this browser.');
@@ -1200,7 +1553,7 @@ async function executeTask({ kind, options, instruction, tokens, hooks }) {
     try {
         const raw = ai.engine === 'gemini-nano'
             ? await runNano(kind, instruction, options || {}, hooks || {})
-            : await runLocal(instruction, hooks || {});
+            : stripEchoedInstructions(await runLocal(instruction, hooks || {}), instruction.system);
 
         return restoreTokens(cleanOutput(raw), tokens || []);
     } finally {
