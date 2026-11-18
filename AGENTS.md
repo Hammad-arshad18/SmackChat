@@ -16,6 +16,8 @@ Do not scan `vendor/` or `node_modules/`. Start in the file map below.
 - Threads, reactions, edit, delete, copy. Search is ⌘K (`CommandPalette.vue`) plus in-channel search.
 - Today (`LoungeView`): shift, timer, unread, presence. Attendance heatmap, CSV export, schedule, holidays.
 - Plans: `standard` keeps history `SMACKCHAT_RETENTION_DAYS` (90). `archive` is forever at `SMACKCHAT_ARCHIVE_PRICE_CENTS` (700) per person. Not a real card charge. `smackchat:prune-history` deletes old standard-plan rows.
+- Huddles: WebRTC audio/video from the channel header. The server is only the switchboard. Free `standard` is one-to-one; `archive` adds groups up to `SMACKCHAT_CALL_GROUP_LIMIT` (8). In a DM the UI says "call"; in a channel it says "huddle". The callee gets a full-screen ring with a Web Audio ringtone, a title flash, and a browser notification when permitted. The call stage has a full-screen toggle and a 45-second ring / 60-second no-answer timeout.
+- Realtime key: the owner can put the workspace's own Ably key in Settings. It is encrypted at rest, never shown again, and minted into short-lived tokens. Without a workspace or server key the app polls.
 - Push (VAPID) and a PWA (`public/manifest.webmanifest`, `public/sw.js`). Theme: light, dark, system.
 - On-device AI (`ai.js`): Chrome Gemini Nano first, otherwise the Transformers.js worker. Rewrite, draft, and summarize run locally; no AI request ever reaches the API. Models download once into `transformers-cache`; when one cannot start (memory/GPU), the next candidate runs in a fresh worker and the choice is remembered.
 
@@ -43,6 +45,8 @@ Shell and nav: `Shell.vue`, `WorkspaceNav.vue`. Router: `resources/js/router.js`
 - Desktop: thread is the right column; its reply field is inside the panel; the channel composer stays under the transcript. At `max-width: 1080px` the thread is `position: fixed; inset: 0` and the channel composer is hidden.
 - Reactions broadcast `message.reacted` with `actor_id`. The client keeps the viewer's `mine` flag unless they are the actor.
 - Ably channel `smackchat:ws:{workspaceId}:ch:{channelId}`, event `message`. No `ABLY_KEY`: the open chat polls. That is expected.
+- Huddle signals ride the same channel on event `call` (ring, joined, left, signal, ended). SDP/ICE rows live in `call_signals` and are also polled over HTTP, so calls work without Ably. The channel capability is unchanged; only the server publishes `call`. Signaling is not end to end: SDP/ICE is readable by the server and cleared when the call ends.
+- A workspace Ably key replaces `ABLY_KEY` for that office. Tokens are scoped to that workspace.
 - E2E search does not send the query string. The API returns recent visible rows; the browser decrypts and filters.
 - Push text for a user message is `New message`.
 - Attachments are files the server can read. They are not end to end.
@@ -60,6 +64,8 @@ Punch actions: `check_in`, `break_in`, `break_out`, `check_out`. Checkout writes
 | E2E | `app/Support/E2eSealer.php`, `resources/js/e2e.js`, `E2eController` |
 | URL tokens | `app/Support/OpaqueId.php` |
 | Channels | `ChannelController`, `ChannelAccess` |
+| Huddles | `CallController`, `CallService`, `resources/js/stores/calls.js`, `CallDock.vue` |
+| Realtime key | `RealtimeSettingsController`, `AblyPublisher` |
 | People | `MemberController`, `InvitationController` |
 | Attendance | `AttendanceController`, `AttendanceService` |
 | Schedule | `ScheduleController` |

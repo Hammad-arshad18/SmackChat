@@ -12,4 +12,16 @@ return [
     // 0 keeps attendance forever. Set a number when a local rule requires the
     // records to be destroyed after a fixed number of days.
     'attendance_retention_days' => (int) env('SMACKCHAT_ATTENDANCE_RETENTION_DAYS', 0),
+
+    // Huddles. The free (standard) plan is one-to-one; the archive plan adds
+    // group huddles. Media is peer to peer, so this is a seat cap for the mesh.
+    'call_group_limit' => (int) env('SMACKCHAT_CALL_GROUP_LIMIT', 8),
+    'call_stale_seconds' => (int) env('SMACKCHAT_CALL_STALE_SECONDS', 120),
+
+    // Comma-separated STUN/TURN URLs. Add a TURN server when people are not on
+    // the same office network; STUN alone cannot cross every firewall.
+    'call_ice_servers' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string) env('SMACKCHAT_CALL_ICE_SERVERS', 'stun:stun.l.google.com:19302')),
+    ))),
 ];

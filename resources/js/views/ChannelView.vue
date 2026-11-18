@@ -26,6 +26,7 @@ import { isEmojiOnlyText } from '@/lib/emojis';
 import { reportViewing } from '@/push';
 import { publishTyping, realtimeConnected, watchTyping, whenRealtime } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
+import { useCallStore } from '@/stores/calls';
 import { useOfficeStore } from '@/stores/office';
 import { formatClock, formatDay, sameDay, timeAgo } from '@/time';
 
@@ -34,6 +35,7 @@ const route = useRoute();
 const router = useRouter();
 const office = useOfficeStore();
 const auth = useAuthStore();
+const calls = useCallStore();
 const toast = useToast();
 const confirm = useConfirm();
 
@@ -90,6 +92,9 @@ const arriveTimers = new Map();
 
 const current = computed(() => office.channels.find((item) => item.slug === props.channel));
 const isDm = computed(() => current.value?.type === 'dm');
+const canHuddle = computed(() => Boolean(current.value) && current.value.type !== 'attendance');
+const channelCall = computed(() => (current.value ? calls.callFor(current.value.id) : null));
+const callNoun = computed(() => (isDm.value ? 'call' : 'huddle'));
 const mentionPeople = computed(() => {
     if (!current.value || current.value.type === 'public') {
         return office.members;
@@ -1144,6 +1149,14 @@ function openSearch() {
     searchResults.value = [];
 }
 
+function startHuddle(kind = 'audio') {
+    if (!canHuddle.value) {
+        return;
+    }
+
+    calls.start(current.value, kind);
+}
+
 async function highlightMessage(id) {
     await nextTick();
     const element = document.getElementById(`msg-${id}`);
@@ -1318,6 +1331,31 @@ onBeforeUnmount(() => {
 
             <div class="chat-tools">
                 <span v-if="aiBadgeLabel" class="ai-ready-badge chat-ai-badge">{{ aiBadgeLabel }}</span>
+                <Tag
+                    v-if="channelCall"
+                    severity="success"
+                    :value="`${isDm ? 'Call' : 'Huddle'} · ${channelCall.participants.length}`"
+                    class="huddle-tag"
+                />
+                <Button
+                    v-if="canHuddle"
+                    icon="pi pi-phone"
+                    text
+                    rounded
+                    :severity="channelCall ? 'success' : undefined"
+                    :aria-label="channelCall ? `Join the ${callNoun}` : `Start an audio ${callNoun}`"
+                    v-tooltip.bottom="channelCall ? `Join ${callNoun} · ${channelCall.participants.length} in` : `Start an audio ${callNoun}`"
+                    @click="startHuddle(channelCall?.kind || 'audio')"
+                />
+                <Button
+                    v-if="canHuddle"
+                    icon="pi pi-video"
+                    text
+                    rounded
+                    :aria-label="`Start a video ${callNoun}`"
+                    v-tooltip.bottom="`Start a video ${callNoun}`"
+                    @click="startHuddle('video')"
+                />
                 <Button
                     v-if="aiReady"
                     icon="pi pi-sparkles"

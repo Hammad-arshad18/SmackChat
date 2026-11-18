@@ -82,6 +82,25 @@ const aiStatusLabel = computed(() => {
 const aiCanDownload = computed(() => ai.engine === 'transformers-local' && ai.modelState === 'not-downloaded');
 const aiCanDelete = computed(() => ai.engine === 'transformers-local' && (ai.modelState === 'ready' || ai.hasLocalCache));
 const aiCanRedownload = computed(() => ai.engine === 'transformers-local' && ai.modelState === 'ready');
+const ablyKey = ref('');
+const ablyBusy = ref(false);
+const ablyTesting = ref(false);
+const realtimeMode = computed(() => office.workspace?.realtime?.mode || 'polling');
+const realtimeLabel = computed(() => ({
+    workspace: 'Your Ably app',
+    server: 'Server Ably key',
+    polling: 'Polling (no Ably key)',
+}[realtimeMode.value] || 'Polling (no Ably key)'));
+const realtimeTagLabel = computed(() => ({
+    workspace: 'Own key',
+    server: 'Server key',
+    polling: 'Polling',
+}[realtimeMode.value] || 'Polling'));
+const realtimeTagSeverity = computed(() => ({
+    workspace: 'success',
+    server: 'secondary',
+    polling: 'warn',
+}[realtimeMode.value] || 'warn'));
 
 onMounted(async () => {
     try {
@@ -173,6 +192,85 @@ function syncForm() {
 }
 
 watch(() => auth.user, syncForm, { immediate: true });
+
+async function saveAblyKey() {
+    if (ablyBusy.value || !ablyKey.value.trim()) {
+        return;
+    }
+
+    ablyBusy.value = true;
+
+    try {
+        const { data } = await api.put(`/workspaces/${office.slug}/realtime`, {
+            ably_key: ablyKey.value.trim(),
+        });
+        office.workspace = { ...office.workspace, realtime: data.realtime };
+        ablyKey.value = '';
+        office.reconnectRealtime();
+        toast.add({
+            severity: 'success',
+            summary: 'Realtime key saved',
+            detail: 'This workspace now uses its own Ably app. Teammates pick it up when they reload.',
+            life: 4600,
+        });
+    } catch (error) {
+        toast.add({ severity: 'error', summary: 'Ably key', detail: errorText(error, 'Could not save that key.'), life: 4200 });
+    } finally {
+        ablyBusy.value = false;
+    }
+}
+
+function removeAblyKey() {
+    confirm.require({
+        message: 'Go back to the server Ably key? Live messages keep working, but the workspace stops using its own Ably app.',
+        header: 'Remove workspace Ably key',
+        icon: 'pi pi-times',
+        rejectProps: { label: 'Keep it', severity: 'secondary', text: true },
+        acceptProps: { label: 'Remove', severity: 'danger' },
+        accept: async () => {
+            try {
+                const { data } = await api.delete(`/workspaces/${office.slug}/realtime`);
+                office.workspace = { ...office.workspace, realtime: data.realtime };
+                office.reconnectRealtime();
+                toast.add({ severity: 'success', summary: 'Key removed', life: 2600 });
+            } catch (error) {
+                toast.add({ severity: 'error', summary: 'Ably key', detail: errorText(error), life: 4000 });
+            }
+        },
+    });
+}
+
+async function testRealtime() {
+    if (ablyTesting.value) {
+        return;
+    }
+
+    ablyTesting.value = true;
+
+    try {
+        const { data } = await api.get('/realtime/token', { params: { workspace: office.slug } });
+
+        if (data.enabled && data.token) {
+            toast.add({
+                severity: 'success',
+                summary: 'Realtime is live',
+                detail: data.source === 'workspace' ? 'Ably accepted the workspace key.' : 'Ably accepted the server key.',
+                life: 3600,
+            });
+        } else {
+            toast.add({
+                severity: 'warn',
+                summary: 'No live connection',
+                detail: 'Ably did not return a token. Chat still works by polling. Check the key format appId.keyId:secret.',
+                life: 5200,
+            });
+        }
+    } catch (error) {
+        toast.add({ severity: 'warn', summary: 'Realtime test', detail: errorText(error), life: 4200 });
+    } finally {
+        ablyTesting.value = false;
+    }
+}
 
 async function saveProfile() {
     busy.value = true;
@@ -564,6 +662,7 @@ async function deleteAccount() {
                     <div><span>Expected day</span><strong>{{ minutesLabel(office.workspace.standard_day_minutes || 480) }}</strong></div>
                     <div><span>Working days</span><strong>{{ office.workspace.work_days?.length || 5 }} days a week</strong></div>
                     <div><span>History</span><strong>{{ office.workspace.plan === 'archive' ? 'Kept forever' : `${office.workspace.retention_days} days` }}</strong></div>
+                    <div><span>Huddles</span><strong>{{ office.workspace.plan === 'archive' ? `Groups up to ${office.workspace.calls?.limit || 8}` : 'One to one (free)' }}</strong></div>
                 </div>
 
                 <div class="workspace-actions">
@@ -582,6 +681,45 @@ async function deleteAccount() {
                     <Button label="Leave" icon="pi pi-sign-out" severity="danger" text @click="leaveWorkspace" />
                 </div>
                 <p v-else class="fine">The owner stays with the workspace. Transfer ownership is not available yet.</p>
+            </section>
+
+            <section class="panel realtime-panel">
+                <header class="card-head">
+                    <div><p class="card-kicker">Realtime</p><h2>Live delivery</h2></div>
+                    <Tag :value="realtimeTagLabel" :severity="realtimeTagSeverity" />
+                </header>
+
+                <div class="detail-rows">
+                    <div><span>Messages and calls</span><strong>{{ realtimeLabel }}</strong></div>
+                    <div v-if="office.workspace.realtime?.masked"><span>Workspace key</span><strong>{{ office.workspace.realtime.masked }}</strong></div>
+                    <div><span>Fallback</span><strong>Polling — chat always works</strong></div>
+                    <div><span>Ably app id</span><strong>{{ office.workspace.realtime?.mode === 'workspace' ? 'This workspace' : 'Server default' }}</strong></div>
+                </div>
+
+                <template v-if="office.isOwner">
+                    <div class="field realtime-key-field">
+                        <label>Your own Ably key</label>
+                        <Password
+                            v-model="ablyKey"
+                            toggle-mask
+                            :feedback="false"
+                            placeholder="appId.keyId:secret"
+                            autocomplete="off"
+                            fluid
+                        />
+                    </div>
+                    <p class="fine">
+                        Bring the office's own Ably app. The key is stored encrypted, never shown again, and only used to mint
+                        short-lived tokens for people in this workspace. Leave it empty to use the server key, or use polling
+                        when neither is set. Test connection checks the saved key.
+                    </p>
+                    <div class="workspace-actions">
+                        <Button label="Save key" icon="pi pi-check" size="small" :loading="ablyBusy" :disabled="!ablyKey.trim()" @click="saveAblyKey" />
+                        <Button label="Test connection" icon="pi pi-bolt" severity="secondary" outlined size="small" :loading="ablyTesting" @click="testRealtime" />
+                        <Button v-if="office.workspace.realtime?.custom" label="Remove key" icon="pi pi-trash" severity="danger" text size="small" @click="removeAblyKey" />
+                    </div>
+                </template>
+                <p v-else class="fine">Only the workspace owner can change the Ably key.</p>
             </section>
 
             <section class="panel activity-panel">

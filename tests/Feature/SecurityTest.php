@@ -62,7 +62,8 @@ class SecurityTest extends TestCase
             ->assertOk()
             ->assertHeader('X-Content-Type-Options', 'nosniff')
             ->assertHeader('X-Frame-Options', 'DENY')
-            ->assertHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+            ->assertHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+            ->assertHeader('Permissions-Policy', 'camera=(self), microphone=(self), display-capture=(self), geolocation=(self), payment=()');
     }
 
     public function test_login_locks_a_bad_password_after_five_tries(): void

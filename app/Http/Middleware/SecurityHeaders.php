@@ -34,7 +34,7 @@ class SecurityHeaders
             'X-Content-Type-Options' => 'nosniff',
             'X-Frame-Options' => 'DENY',
             'Referrer-Policy' => 'strict-origin-when-cross-origin',
-            'Permissions-Policy' => 'camera=(), microphone=(), geolocation=(self), payment=()',
+            'Permissions-Policy' => 'camera=(self), microphone=(self), display-capture=(self), geolocation=(self), payment=()',
             'X-Permitted-Cross-Domain-Policies' => 'none',
             'Cross-Origin-Opener-Policy' => 'same-origin',
         ];

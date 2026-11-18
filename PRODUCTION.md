@@ -37,6 +37,17 @@ business decisions that cannot live in the repository. Work top to bottom.
   grace period before enabling the “Forever archive” price.
 - **Email deliverability** — SPF, DKIM, and DMARC for the sending domain, or
   verification and reset mail will land in spam.
+- **Huddles** — audio/video is peer to peer WebRTC and needs HTTPS. Set
+  `SMACKCHAT_CALL_ICE_SERVERS` to a comma-separated list; a STUN server is
+  enough inside one office network, but remote people need a TURN server
+  (for example coturn) or calls fail behind strict NAT/firewalls. There is no
+  media server: every participant sends one stream to every other participant,
+  so keep `SMACKCHAT_CALL_GROUP_LIMIT` at 8 or lower. The free plan is
+  one-to-one; groups belong to the archive plan.
+- **Ably** — `ABLY_KEY` is the fallback for every workspace. An owner may paste
+  the office's own Ably key in **Settings → Realtime**; it is encrypted with
+  `APP_KEY` and never returned by the API. Keep `APP_KEY` backed up or that key
+  becomes unreadable.
 
 ## Compliance
 
