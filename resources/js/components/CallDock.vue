@@ -47,6 +47,7 @@ const caller = computed(() => {
         || null;
 });
 const remoteList = computed(() => calls.others);
+const waiting = computed(() => calls.outgoing && remoteList.value.length === 0);
 const localVideo = computed(() => Boolean(calls.localStream?.getVideoTracks?.().length));
 const hasVideo = computed(() => localVideo.value || remoteList.value.some((person) => remoteVideo(person.user_id)));
 const waitingName = computed(() => {
@@ -59,7 +60,9 @@ const waitingName = computed(() => {
 const outgoingLabel = computed(() => (isDm.value ? `Calling ${waitingName.value}…` : `Ringing ${waitingName.value}…`));
 
 function remoteVideo(userId) {
-    return Boolean(calls.remoteStreams[userId]?.getVideoTracks?.().length);
+    const tracks = calls.remoteStreams[userId]?.getVideoTracks?.() || [];
+
+    return tracks.some((track) => track.readyState === 'live' && track.enabled && !track.muted);
 }
 
 function personFor(userId) {
@@ -67,14 +70,14 @@ function personFor(userId) {
 }
 
 async function pumpAudio() {
-    const audios = [...document.querySelectorAll('.call-dock audio')]
-        .filter((audio) => audio.srcObject?.getAudioTracks?.().length);
+    const media = [...document.querySelectorAll('.call-dock video, .call-dock audio')]
+        .filter((node) => !node.muted && node.srcObject?.getAudioTracks?.().length);
 
-    if (!audios.length) {
+    if (!media.length) {
         return;
     }
 
-    const results = await Promise.allSettled(audios.map((audio) => audio.play()));
+    const results = await Promise.allSettled(media.map((node) => node.play()));
     soundBlocked.value = results.some((result) => result.status === 'rejected'
         && result.reason?.name !== 'AbortError');
 }
@@ -270,8 +273,8 @@ watch(() => office.slug, async (slug) => {
             </div>
         </header>
 
-        <div class="call-stage" :class="{ audio: !hasVideo, outgoing: calls.outgoing }">
-            <div v-if="calls.outgoing" class="call-outgoing">
+        <div class="call-stage" :class="{ audio: !hasVideo, outgoing: waiting }" @pointerdown="pumpAudio">
+            <div v-if="waiting" class="call-outgoing">
                 <span class="call-outgoing-pulse"><i class="pi pi-phone" /></span>
                 <strong>{{ outgoingLabel }}</strong>
                 <small>Waiting for an answer</small>
@@ -290,22 +293,24 @@ watch(() => office.slug, async (slug) => {
                 </div>
 
                 <div v-for="person in remoteList" :key="person.user_id" class="call-tile">
-                    <CallVideo v-if="remoteVideo(person.user_id)" :stream="calls.remoteStreams[person.user_id]" muted />
-                    <div v-else class="call-audio-avatar">
+                    <CallVideo
+                        v-if="calls.remoteStreams[person.user_id]"
+                        :stream="calls.remoteStreams[person.user_id]"
+                        :class="{ 'is-audio': !remoteVideo(person.user_id) }"
+                        @blocked="soundBlocked = true"
+                        @playing="soundBlocked = false"
+                    />
+                    <div v-if="!remoteVideo(person.user_id)" class="call-audio-avatar">
                         <PersonAvatar :person="personFor(person.user_id)" :name="person.name" size="large" />
                     </div>
                     <span class="call-tile-name">{{ person.name }}</span>
-                    <audio
-                        v-if="calls.remoteStreams[person.user_id]"
-                        :ref="(el) => el && (el.srcObject = calls.remoteStreams[person.user_id])"
-                        autoplay
-                    />
                 </div>
             </template>
 
-            <p v-if="calls.connection === 'connecting' && !calls.outgoing" class="call-connecting">Connecting…</p>
+            <p v-if="calls.connection === 'failed'" class="call-connecting">Can't reach them yet. Still trying…</p>
+            <p v-else-if="calls.connection === 'connecting' && !waiting" class="call-connecting">Connecting…</p>
 
-            <button v-if="soundBlocked && !calls.outgoing" type="button" class="call-sound" @click="pumpAudio">
+            <button v-if="soundBlocked && !waiting" type="button" class="call-sound" @click.stop="pumpAudio">
                 <i class="pi pi-volume-up" /> Enable sound
             </button>
         </div>

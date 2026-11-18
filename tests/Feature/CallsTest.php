@@ -101,6 +101,14 @@ class CallsTest extends TestCase
             ->assertOk();
 
         $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/signal", [
+                'to' => $owner->id,
+                'type' => 'refresh',
+                'payload' => ['ask' => 1],
+            ])
+            ->assertOk();
+
+        $this->actingAs($lin, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/signals")
             ->assertOk()
             ->assertJsonCount(1, 'signals')
@@ -110,7 +118,9 @@ class CallsTest extends TestCase
         $this->actingAs($owner, 'sanctum')
             ->getJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/signals")
             ->assertOk()
-            ->assertJsonCount(0, 'signals');
+            ->assertJsonCount(1, 'signals')
+            ->assertJsonPath('signals.0.type', 'refresh')
+            ->assertJsonPath('signals.0.from', $lin->id);
     }
 
     public function test_outsiders_cannot_start_or_read_a_private_huddle(): void

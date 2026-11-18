@@ -7,12 +7,40 @@ const props = defineProps({
     mirror: { type: Boolean, default: false },
 });
 
+const emit = defineEmits(['blocked', 'playing']);
+
 const el = ref(null);
 
-function bind(stream) {
-    if (el.value && el.value.srcObject !== (stream || null)) {
-        el.value.srcObject = stream || null;
+function play(node) {
+    if (!node?.srcObject) {
+        return;
     }
+
+    node.play().then(() => {
+        emit('playing');
+    }).catch((error) => {
+        if (error?.name !== 'AbortError') {
+            emit('blocked');
+        }
+    });
+}
+
+function bind(stream) {
+    const node = el.value;
+
+    if (!node) {
+        return;
+    }
+
+    if (node.srcObject !== (stream || null)) {
+        node.srcObject = stream || null;
+    }
+
+    stream?.getTracks?.().forEach((track) => {
+        track.onunmute = () => play(node);
+    });
+
+    play(node);
 }
 
 watch(() => props.stream, bind);

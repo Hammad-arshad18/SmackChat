@@ -9,8 +9,8 @@ import { useOfficeStore } from '@/stores/office';
 const RING_WINDOW_MS = 60000;
 const RING_TIMEOUT_MS = 45000;
 const ANSWER_TIMEOUT_MS = 60000;
-const SIGNAL_POLL_MS = 900;
-const SYNC_MS = 5000;
+const SIGNAL_POLL_MS = 700;
+const SYNC_MS = 1000;
 
 function notice(message) {
     window.dispatchEvent(new CustomEvent('smack-call-notice', { detail: { message } }));
@@ -380,7 +380,7 @@ export const useCallStore = defineStore('calls', () => {
         }
 
         connectPeers();
-        connection.value = 'live';
+        connection.value = 'connecting';
         startTimers();
         tick();
     }
@@ -442,68 +442,253 @@ export const useCallStore = defineStore('calls', () => {
         }
     }
 
-    function ensurePeer(peerId) {
-        if (peers.has(peerId)) {
-            return peers.get(peerId);
+    /**
+     * The lower user id is the only side that creates offers. Both sides used
+     * to offer at once, and the rollback that was meant to break the tie ran
+     * while the connection was still stable, so Chrome threw and both peers
+     * stayed stuck with an offer nobody answered. Audio and video never started.
+     */
+    function isOfferer(peerId) {
+        return Number(myId.value) < Number(peerId);
+    }
+
+    function enqueue(state, job) {
+        state.chain = state.chain.then(job).catch((error) => {
+            console.error('[huddle] negotiation failed', error);
+        });
+
+        return state.chain;
+    }
+
+    function videoTransceiver(pc) {
+        return pc.getTransceivers().find((item) => {
+            const kind = item.sender?.track?.kind || item.receiver?.track?.kind;
+
+            return kind === 'video';
+        }) || null;
+    }
+
+    function outgoingVideoTrack() {
+        return screenTrack || cameraTrack || null;
+    }
+
+    async function armVideo(pc) {
+        let transceiver = pc.__video || videoTransceiver(pc);
+
+        if (!transceiver) {
+            transceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
+            pc.__video = transceiver;
         }
 
-        const pc = new RTCPeerConnection({ iceServers: iceServers() });
+        if (transceiver.direction !== 'sendrecv') {
+            transceiver.direction = 'sendrecv';
+        }
+
+        const video = outgoingVideoTrack();
+
+        if (transceiver.sender.track !== video) {
+            await transceiver.sender.replaceTrack(video);
+        }
+
+        return transceiver;
+    }
+
+    function publishRemote(peerId, stream) {
+        remoteStreams.value = { ...remoteStreams.value, [peerId]: stream };
+
+        if (outgoing.value) {
+            outgoing.value = false;
+            clearTimeout(outgoingTimer);
+            outgoingTimer = null;
+        }
+    }
+
+    function updateConnection() {
+        const states = [...peers.values()].map((item) => item.pc.iceConnectionState);
+
+        if (!call.value) {
+            connection.value = 'idle';
+
+            return;
+        }
+
+        if (states.some((item) => item === 'connected' || item === 'completed')) {
+            connection.value = 'live';
+            error.value = '';
+
+            return;
+        }
+
+        if (states.length && states.every((item) => item === 'failed' || item === 'disconnected')) {
+            connection.value = 'failed';
+
+            return;
+        }
+
+        connection.value = 'connecting';
+    }
+
+    function ensurePeer(peerId) {
+        const key = Number(peerId);
+
+        if (peers.has(key)) {
+            return peers.get(key);
+        }
+
+        const pc = new RTCPeerConnection({
+            iceServers: iceServers(),
+            bundlePolicy: 'max-bundle',
+        });
         const state = {
             pc,
             makingOffer: false,
-            polite: String(myId.value) > String(peerId),
+            ignoreOffer: false,
+            polite: Number(myId.value) > key,
             pending: [],
             stream: new MediaStream(),
+            chain: Promise.resolve(),
+            lastRestart: 0,
         };
-        peers.set(peerId, state);
+        peers.set(key, state);
 
-        if (local) {
-            for (const track of local.getTracks()) {
-                pc.addTrack(track, local);
-            }
+        const audio = local?.getAudioTracks()[0];
+
+        if (audio) {
+            pc.addTrack(audio, local);
         }
+
+        // A video m-line from the start lets camera and screen share swap with
+        // replaceTrack instead of a second handshake that can fail silently.
+        pc.__video = pc.addTransceiver('video', { direction: 'sendrecv' });
+        armVideo(pc).catch((error) => console.error('[huddle] video setup failed', error));
 
         pc.onicecandidate = (event) => {
             if (event.candidate) {
-                sendSignal(peerId, 'candidate', event.candidate.toJSON());
+                sendSignal(key, 'candidate', event.candidate.toJSON());
             }
         };
 
         pc.ontrack = (event) => {
-            state.stream.addTrack(event.track);
-            remoteStreams.value = { ...remoteStreams.value, [peerId]: state.stream };
+            const stream = event.streams?.[0] || state.stream;
+
+            if (!event.streams?.[0]) {
+                if (!stream.getTracks().includes(event.track)) {
+                    stream.addTrack(event.track);
+                }
+            }
+
+            state.stream = stream;
+            publishRemote(key, stream);
+            event.track.onunmute = () => publishRemote(key, stream);
+            event.track.onmute = () => publishRemote(key, stream);
+            event.track.onended = () => publishRemote(key, stream);
         };
 
-        pc.onnegotiationneeded = async () => {
-            if (!local || !call.value) {
+        pc.onnegotiationneeded = () => {
+            enqueue(state, async () => {
+                if (!local || !call.value || pc.signalingState !== 'stable') {
+                    return;
+                }
+
+                if (!isOfferer(key)) {
+                    if (pc.remoteDescription && await senderNeedsOffer(pc)) {
+                        await sendSignal(key, 'refresh', { ask: 1 });
+                    }
+
+                    return;
+                }
+
+                // An offer is already sitting unanswered. Sending another one
+                // here is what left both sides waiting on each other.
+                if (pc.localDescription && !pc.currentRemoteDescription) {
+                    return;
+                }
+
+                state.makingOffer = true;
+
+                try {
+                    await armVideo(pc);
+                    if (pc.signalingState !== 'stable') {
+                        return;
+                    }
+
+                    await pc.setLocalDescription();
+                    await sendSignal(key, 'offer', pc.localDescription);
+                } catch (error) {
+                    console.error('[huddle] offer failed', error);
+                } finally {
+                    state.makingOffer = false;
+                }
+            });
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            updateConnection();
+
+            if (pc.iceConnectionState !== 'failed' || !isOfferer(key)) {
                 return;
             }
 
-            try {
-                state.makingOffer = true;
-                await pc.setLocalDescription();
-                await sendSignal(peerId, 'offer', pc.localDescription);
-            } catch (error) {
-                console.error('[huddle] offer failed', error);
-            } finally {
-                state.makingOffer = false;
-            }
-        };
+            const now = Date.now();
 
-        pc.onconnectionstatechange = () => {
-            if (['failed', 'closed'].includes(pc.connectionState)) {
-                pc.restartIce?.();
+            if (now - state.lastRestart < 5000) {
+                return;
             }
+
+            state.lastRestart = now;
+            pc.restartIce();
         };
 
         return state;
     }
 
-    async function handleSignal(from, type, payload) {
+    async function senderNeedsOffer(pc) {
+        await armVideo(pc);
+
+        return pc.getTransceivers().some((item) => {
+            if (!item.sender.track || item.direction !== 'sendrecv') {
+                return false;
+            }
+
+            const current = item.currentDirection;
+
+            return current === 'recvonly' || current === 'inactive';
+        });
+    }
+
+    function handleSignal(from, type, payload) {
         const state = ensurePeer(from);
+
+        return enqueue(state, () => applySignal(state, from, type, payload));
+    }
+
+    async function applySignal(state, from, type, payload) {
         const pc = state.pc;
+        const key = Number(from);
+
+        if (type === 'refresh') {
+            if (!isOfferer(key) || pc.signalingState !== 'stable') {
+                return;
+            }
+
+            state.makingOffer = true;
+
+            try {
+                await armVideo(pc);
+                await pc.setLocalDescription();
+                await sendSignal(key, 'offer', pc.localDescription);
+            } finally {
+                state.makingOffer = false;
+            }
+
+            return;
+        }
 
         if (type === 'candidate') {
+            if (state.ignoreOffer) {
+                return;
+            }
+
             if (!pc.remoteDescription) {
                 state.pending.push(payload);
 
@@ -512,40 +697,53 @@ export const useCallStore = defineStore('calls', () => {
 
             try {
                 await pc.addIceCandidate(payload);
-            } catch {
-                /* a candidate can arrive after its peer left */
+            } catch (error) {
+                console.error('[huddle] ice candidate failed', error);
             }
 
             return;
         }
 
-        if (!payload?.type) {
+        if (type !== 'offer' && type !== 'answer') {
             return;
         }
 
-        const collision = payload.type === 'offer' && (state.makingOffer || pc.signalingState !== 'stable');
+        if (!payload?.sdp) {
+            return;
+        }
+
+        const collision = type === 'offer' && (state.makingOffer || pc.signalingState !== 'stable');
 
         if (!state.polite && collision) {
+            state.ignoreOffer = true;
+            state.pending = [];
+
             return;
         }
 
+        state.ignoreOffer = false;
+
         try {
-            if (collision) {
-                await pc.setLocalDescription({ type: 'rollback' });
-            }
-
             await pc.setRemoteDescription(description(payload));
-
-            for (const candidate of state.pending.splice(0)) {
-                await pc.addIceCandidate(candidate).catch(() => {});
-            }
-
-            if (payload.type === 'offer') {
-                await pc.setLocalDescription();
-                await sendSignal(from, 'answer', pc.localDescription);
-            }
         } catch (error) {
-            console.error('[huddle] signal failed', type, payload?.type, error);
+            if (!(state.polite && type === 'offer' && pc.signalingState === 'have-local-offer')) {
+                console.error('[huddle] signal failed', type, error);
+
+                return;
+            }
+
+            await pc.setLocalDescription({ type: 'rollback' });
+            await pc.setRemoteDescription(description(payload));
+        }
+
+        for (const candidate of state.pending.splice(0)) {
+            await pc.addIceCandidate(candidate).catch(() => {});
+        }
+
+        if (type === 'offer') {
+            await armVideo(pc);
+            await pc.setLocalDescription();
+            await sendSignal(key, 'answer', pc.localDescription);
         }
     }
 
@@ -554,15 +752,34 @@ export const useCallStore = defineStore('calls', () => {
             return;
         }
 
-        const body = type === 'candidate'
-            ? { to, type, payload }
-            : { to, type, payload: description(payload) };
-
-        try {
-            await api.post(`/workspaces/${workspaceSlug}/calls/${call.value.id}/signal`, body);
-        } catch {
-            /* polling still catches what matters */
+        if ((type === 'offer' || type === 'answer') && !payload?.sdp) {
+            return;
         }
+
+        const body = (type === 'offer' || type === 'answer')
+            ? { to: Number(to), type, payload: description(payload) }
+            : { to: Number(to), type, payload };
+
+        let lastError = null;
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+                await api.post(`/workspaces/${workspaceSlug}/calls/${call.value.id}/signal`, body);
+
+                return;
+            } catch (error) {
+                lastError = error;
+                const status = error?.response?.status;
+
+                if (status === 403 || status === 404 || status === 410 || status === 422) {
+                    break;
+                }
+
+                await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+            }
+        }
+
+        console.error('[huddle] signal was not delivered', type, lastError?.response?.status || lastError?.message);
     }
 
     async function fetchSignals() {
@@ -610,6 +827,7 @@ export const useCallStore = defineStore('calls', () => {
             noteParticipants();
             prunePeers();
             connectPeers();
+            updateConnection();
         } catch {
             /* keep the last known roster */
         } finally {
@@ -618,7 +836,7 @@ export const useCallStore = defineStore('calls', () => {
     }
 
     function prunePeers() {
-        const seated = new Set(others.value.map((person) => person.user_id));
+        const seated = new Set(others.value.map((person) => Number(person.user_id)));
 
         for (const [peerId, state] of peers.entries()) {
             if (!seated.has(peerId)) {
@@ -726,28 +944,63 @@ export const useCallStore = defineStore('calls', () => {
         });
     }
 
+    async function applyOutgoingVideo() {
+        await Promise.all([...peers.values()].map(async (state) => {
+            await armVideo(state.pc);
+        }));
+
+        // replaceTrack is not enough when the m-line was negotiated without a
+        // camera. Ask for a fresh offer so the other side actually receives it.
+        for (const [peerId, state] of peers.entries()) {
+            if (state.pc.signalingState !== 'stable') {
+                continue;
+            }
+
+            if (isOfferer(peerId)) {
+                enqueue(state, async () => {
+                    if (state.pc.signalingState !== 'stable') {
+                        return;
+                    }
+
+                    state.makingOffer = true;
+
+                    try {
+                        await armVideo(state.pc);
+                        await state.pc.setLocalDescription();
+                        await sendSignal(peerId, 'offer', state.pc.localDescription);
+                    } finally {
+                        state.makingOffer = false;
+                    }
+                });
+
+                continue;
+            }
+
+            if (state.pc.remoteDescription) {
+                await sendSignal(peerId, 'refresh', { ask: 1 });
+            }
+        }
+    }
+
     async function toggleCamera() {
         if (!call.value) {
             return;
         }
 
         if (cameraOn.value) {
-            const track = cameraTrack || local?.getVideoTracks()[0];
-
-            if (track) {
-                peers.forEach((state) => {
-                    const sender = state.pc.getSenders().find((item) => item.track === track);
-
-                    if (sender) {
-                        state.pc.removeTrack(sender);
-                    }
-                });
-                track.stop();
-                local?.removeTrack(track);
-            }
-
+            const track = cameraTrack;
             cameraTrack = null;
             cameraOn.value = false;
+
+            if (track) {
+                local?.removeTrack(track);
+                track.stop();
+            }
+
+            if (!sharing.value) {
+                await applyOutgoingVideo();
+            }
+
             refreshPreview();
 
             return;
@@ -764,19 +1017,23 @@ export const useCallStore = defineStore('calls', () => {
             }
 
             cameraTrack = track;
+            cameraOn.value = true;
             track.onended = () => {
-                if (cameraOn.value) {
-                    toggleCamera();
+                if (cameraTrack === track) {
+                    cameraTrack = null;
+                    cameraOn.value = false;
+                    refreshPreview();
                 }
             };
 
-            local.addTrack(track);
-
-            if (!sharing.value) {
-                peers.forEach((state) => state.pc.addTrack(track, local));
+            if (!local.getTracks().includes(track)) {
+                local.addTrack(track);
             }
 
-            cameraOn.value = true;
+            if (!sharing.value) {
+                await applyOutgoingVideo();
+            }
+
             refreshPreview();
         } catch {
             notice('Could not turn on the camera.');
@@ -796,11 +1053,12 @@ export const useCallStore = defineStore('calls', () => {
 
         if (!navigator.mediaDevices?.getDisplayMedia) {
             notice('This browser cannot share a screen.');
+
             return;
         }
 
         try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
             const track = stream.getVideoTracks()[0];
 
             if (!track) {
@@ -809,57 +1067,32 @@ export const useCallStore = defineStore('calls', () => {
 
             screenTrack = track;
             sharing.value = true;
-
-            let replaced = false;
-
-            peers.forEach((state) => {
-                const sender = state.pc
-                    .getSenders()
-                    .find((item) => item.track && item.track.kind === 'video' && item.track !== screenTrack);
-
-                if (sender) {
-                    sender.replaceTrack(track);
-                    replaced = true;
-                }
-            });
-
-            if (!replaced) {
-                local.addTrack(track);
-                peers.forEach((state) => state.pc.addTrack(track, local));
-            }
-
-            refreshPreview();
-
             track.onended = () => {
                 if (sharing.value) {
                     stopSharing();
                 }
             };
+
+            await applyOutgoingVideo();
+            refreshPreview();
         } catch {
             /* the picker was closed */
         }
     }
 
     function stopSharing() {
-        if (!screenTrack) {
-            sharing.value = false;
-
-            return;
-        }
-
-        peers.forEach((state) => {
-            const sender = state.pc.getSenders().find((item) => item.track === screenTrack);
-
-            if (sender) {
-                sender.replaceTrack(cameraTrack || null);
-            }
-        });
-
-        local?.removeTrack(screenTrack);
-        screenTrack.stop();
+        const track = screenTrack;
         screenTrack = null;
         sharing.value = false;
-        refreshPreview();
+
+        if (track) {
+            track.onended = null;
+            track.stop();
+        }
+
+        applyOutgoingVideo()
+            .catch((error) => console.error('[huddle] stop share failed', error))
+            .finally(refreshPreview);
     }
 
     return {

@@ -9210,6 +9210,14 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     transform: scaleX(-1);
 }
 
+.call-video.is-audio {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
 .call-audio-avatar {
     display: grid;
     place-items: center;
