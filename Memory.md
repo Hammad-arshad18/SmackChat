@@ -57,7 +57,9 @@ Register: email code, then `WorkspaceProvisioner::create`. That makes `#general`
 - Caller POSTs a call, joins it, and the others see a ring from `calls/active` or the Ably event. Leaving the last seat ends the call.
 - `Permissions-Policy` allows camera and microphone for the app origin. HTTPS (or localhost) is required.
 - The callee sees a full-screen ring with a Web Audio tone, a flashing tab title, and a browser notification when the tab is hidden. Ringing stops after 45 seconds; the caller gives up after 60 seconds with "No answer".
+- A new call also sends Web Push, so a closed tab gets an "Incoming call" notification. Tapping it opens `?call={id}` and the app joins that call. A closed web app cannot ring like a native phone.
 - The call stage expands to the whole viewport (and asks the browser for full screen when it allows it).
+- SDP loses its final CRLF in `TrimStrings`; both the client and `CallService` restore it. Without the CRLF Chrome refuses the description.
 
 ## Time and money
 

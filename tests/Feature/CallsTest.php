@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Mail\RegistrationCodeMail;
+use App\Models\Call;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\AblyPublisher;
+use App\Services\WebPushNotifier;
 use App\Services\WorkspaceProvisioner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -137,6 +139,38 @@ class CallsTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_a_new_call_rings_closed_tabs_but_joining_does_not(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $lin = $this->member($workspace, 'Lin');
+
+        $bag = new \stdClass;
+        $bag->rings = [];
+        $this->app->instance(WebPushNotifier::class, new class($bag) extends WebPushNotifier
+        {
+            public function __construct(private object $bag) {}
+
+            public function ring(Call $call, User $caller): void
+            {
+                $this->bag->rings[] = ['call' => $call->id, 'caller' => $caller->id];
+            }
+        });
+
+        $call = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->assertCreated()
+            ->json('call');
+
+        $this->assertCount(1, $bag->rings);
+        $this->assertSame($call['id'], $bag->rings[0]['call']);
+
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->assertCreated();
+
+        $this->assertCount(1, $bag->rings);
+    }
+
     public function test_a_direct_call_is_labelled_with_the_other_person(): void
     {
         [$owner, $workspace] = $this->office();
@@ -170,6 +204,36 @@ class CallsTest extends TestCase
             ->getJson("/api/workspaces/{$workspace->slug}/calls/active")
             ->assertOk()
             ->assertJsonCount(0, 'calls');
+    }
+
+    public function test_the_workspace_exposes_stun_and_credentialed_turn_servers(): void
+    {
+        [$owner, $workspace] = $this->office();
+
+        config()->set('smackchat.call_ice_servers', ['stun:stun.l.google.com:19302']);
+        config()->set('smackchat.call_turn_urls', [
+            'turn:relay.example.com:80',
+            'turns:relay.example.com:443?transport=tcp',
+        ]);
+        config()->set('smackchat.call_turn_username', 'smackchat');
+        config()->set('smackchat.call_turn_credential', 'relay-secret');
+
+        $ice = $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}")
+            ->assertOk()
+            ->json('workspace.calls.ice_servers');
+
+        $this->assertContains(['urls' => 'stun:stun.l.google.com:19302'], $ice);
+        $this->assertContains([
+            'urls' => 'turn:relay.example.com:80',
+            'username' => 'smackchat',
+            'credential' => 'relay-secret',
+        ], $ice);
+        $this->assertContains([
+            'urls' => 'turns:relay.example.com:443?transport=tcp',
+            'username' => 'smackchat',
+            'credential' => 'relay-secret',
+        ], $ice);
     }
 
     public function test_the_owner_can_bring_a_workspace_ably_key_and_it_stays_secret(): void

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Call;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\PushSubscription;
@@ -67,6 +68,50 @@ class WebPushNotifier
             'tag' => 'smack-m-'.$message->id,
             'channel_id' => $channel->id,
             'parent_id' => $parentId,
+        ], JSON_UNESCAPED_UNICODE);
+
+        $this->deliver($subscriptions, $payload);
+    }
+
+    /**
+     * Wake a callee whose tab is closed. This is a notification, not a live
+     * WebRTC ring: tapping it opens the conversation and joins the call.
+     */
+    public function ring(Call $call, User $caller): void
+    {
+        $call->loadMissing(['channel.workspace']);
+        $channel = $call->channel;
+
+        if (! $channel || ! $channel->workspace) {
+            return;
+        }
+
+        $recipientIds = $channel->isOpen()
+            ? DB::table('workspace_members')->where('workspace_id', $channel->workspace_id)->pluck('user_id')
+            : $channel->members()->pluck('users.id');
+
+        $subscriptions = PushSubscription::query()
+            ->whereIn('user_id', $recipientIds)
+            ->where('user_id', '!=', $caller->id)
+            ->get();
+
+        if ($subscriptions->isEmpty()) {
+            return;
+        }
+
+        $isDm = $channel->type === Channel::DM;
+        $title = $isDm ? 'Incoming call' : 'Incoming huddle';
+        $body = $isDm
+            ? $caller->name.' is calling'
+            : $caller->name.' started a huddle in #'.$channel->name;
+
+        $payload = json_encode([
+            'title' => $title,
+            'body' => $body,
+            'url' => '/w/'.$channel->workspace->slug.'/c/'.$channel->slug.'?call='.$call->id,
+            'tag' => 'smack-call-'.$call->id,
+            'call_id' => $call->id,
+            'kind' => $call->kind,
         ], JSON_UNESCAPED_UNICODE);
 
         $this->deliver($subscriptions, $payload);

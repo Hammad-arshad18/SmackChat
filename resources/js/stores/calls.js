@@ -17,9 +17,24 @@ function notice(message) {
 }
 
 function iceServers() {
-    const urls = useOfficeStore().workspace?.calls?.ice_servers || [];
+    const servers = useOfficeStore().workspace?.calls?.ice_servers || [];
+    const list = servers.length ? servers : ['stun:stun.l.google.com:19302'];
 
-    return (urls.length ? urls : ['stun:stun.l.google.com:19302']).map((url) => ({ urls: url }));
+    return list.map((server) => (typeof server === 'string' ? { urls: server } : server));
+}
+
+/**
+ * SDP must end with CRLF. Laravel's TrimStrings middleware strips the final
+ * CRLF from request strings, which makes Chrome reject the description with
+ * "Invalid SDP line". Normalise on both send and receive.
+ */
+function description(payload) {
+    const sdp = typeof payload?.sdp === 'string' ? payload.sdp : '';
+
+    return {
+        type: payload?.type,
+        sdp: sdp.endsWith('\r\n') ? sdp : `${sdp}\r\n`,
+    };
 }
 
 /**
@@ -79,6 +94,7 @@ export const useCallStore = defineStore('calls', () => {
         attached = true;
         window.addEventListener('smack-call', onRealtimeCall);
         refreshActive();
+        joinFromLink();
         ringTimer = setInterval(refreshActive, realtimeConnected() ? 20000 : 10000);
         clockTimer = setInterval(tick, 1000);
     }
@@ -247,6 +263,50 @@ export const useCallStore = defineStore('calls', () => {
         }
     }
 
+    /**
+     * A call push opens /w/{slug}/c/{channel}?call={id}. Join that call once,
+     * then drop the query so a refresh does not join it again.
+     */
+    function joinFromLink() {
+        const url = new URL(window.location.href);
+        const id = Number(url.searchParams.get('call'));
+
+        if (!id) {
+            return;
+        }
+
+        // On a cold load the SPA has not resolved the workspace yet. Keep the
+        // query until the slug is ready, then attach() calls this again.
+        if (!office.slug) {
+            return;
+        }
+
+        url.searchParams.delete('call');
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+
+        if (!call.value && !busy.value) {
+            joinById(id);
+        }
+    }
+
+    async function joinById(id) {
+        if (!id || !office.slug || busy.value) {
+            return;
+        }
+
+        busy.value = true;
+        error.value = '';
+
+        try {
+            const { data } = await api.post(`/workspaces/${office.slug}/calls/${id}/join`);
+            await adopt(data.call);
+        } catch (failure) {
+            fail(failure);
+        } finally {
+            busy.value = false;
+        }
+    }
+
     async function acceptIncoming() {
         const target = incoming.value;
 
@@ -330,7 +390,18 @@ export const useCallStore = defineStore('calls', () => {
      * camera or screen track is added or removed.
      */
     function refreshPreview() {
-        localStream.value = local ? new MediaStream(local.getTracks()) : null;
+        if (!local) {
+            localStream.value = null;
+
+            return;
+        }
+
+        // While sharing, the local tile should show what the room sees.
+        const tracks = sharing.value && screenTrack
+            ? [...local.getAudioTracks(), screenTrack]
+            : local.getTracks();
+
+        localStream.value = new MediaStream(tracks);
     }
 
     async function openMedia(kind) {
@@ -412,8 +483,8 @@ export const useCallStore = defineStore('calls', () => {
                 state.makingOffer = true;
                 await pc.setLocalDescription();
                 await sendSignal(peerId, 'offer', pc.localDescription);
-            } catch {
-                /* retried by perfect negotiation */
+            } catch (error) {
+                console.error('[huddle] offer failed', error);
             } finally {
                 state.makingOffer = false;
             }
@@ -463,7 +534,7 @@ export const useCallStore = defineStore('calls', () => {
                 await pc.setLocalDescription({ type: 'rollback' });
             }
 
-            await pc.setRemoteDescription(payload);
+            await pc.setRemoteDescription(description(payload));
 
             for (const candidate of state.pending.splice(0)) {
                 await pc.addIceCandidate(candidate).catch(() => {});
@@ -473,8 +544,8 @@ export const useCallStore = defineStore('calls', () => {
                 await pc.setLocalDescription();
                 await sendSignal(from, 'answer', pc.localDescription);
             }
-        } catch {
-            /* the other side will renegotiate */
+        } catch (error) {
+            console.error('[huddle] signal failed', type, payload?.type, error);
         }
     }
 
@@ -485,7 +556,7 @@ export const useCallStore = defineStore('calls', () => {
 
         const body = type === 'candidate'
             ? { to, type, payload }
-            : { to, type, payload: { type: payload.type, sdp: payload.sdp } };
+            : { to, type, payload: description(payload) };
 
         try {
             await api.post(`/workspaces/${workspaceSlug}/calls/${call.value.id}/signal`, body);
@@ -755,8 +826,9 @@ export const useCallStore = defineStore('calls', () => {
             if (!replaced) {
                 local.addTrack(track);
                 peers.forEach((state) => state.pc.addTrack(track, local));
-                refreshPreview();
             }
+
+            refreshPreview();
 
             track.onended = () => {
                 if (sharing.value) {
@@ -811,6 +883,8 @@ export const useCallStore = defineStore('calls', () => {
         attach,
         detach,
         refreshActive,
+        joinFromLink,
+        joinById,
         start,
         acceptIncoming,
         declineIncoming,

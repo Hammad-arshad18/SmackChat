@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import CallVideo from '@/components/CallVideo.vue';
 import { unlockAudio } from '@/lib/ringtone';
@@ -9,11 +10,13 @@ import { useOfficeStore } from '@/stores/office';
 
 const calls = useCallStore();
 const office = useOfficeStore();
+const route = useRoute();
 const auth = useAuthStore();
 const toast = useToast();
 
 const dock = ref(null);
 const expanded = ref(false);
+const soundBlocked = ref(false);
 let baseTitle = '';
 let titleTimer = null;
 let titleFlip = false;
@@ -62,6 +65,24 @@ function remoteVideo(userId) {
 function personFor(userId) {
     return calls.participants.find((person) => person.user_id === userId) || { user_id: userId, name: 'Teammate' };
 }
+
+async function pumpAudio() {
+    const audios = [...document.querySelectorAll('.call-dock audio')]
+        .filter((audio) => audio.srcObject?.getAudioTracks?.().length);
+
+    if (!audios.length) {
+        return;
+    }
+
+    const results = await Promise.allSettled(audios.map((audio) => audio.play()));
+    soundBlocked.value = results.some((result) => result.status === 'rejected'
+        && result.reason?.name !== 'AbortError');
+}
+
+watch(() => calls.remoteStreams, () => {
+    nextTick(pumpAudio);
+    setTimeout(pumpAudio, 900);
+}, { deep: true });
 
 function onNotice(event) {
     toast.add({
@@ -203,6 +224,12 @@ onBeforeUnmount(() => {
     calls.detach();
 });
 
+watch(() => route.query.call, (id) => {
+    if (id) {
+        calls.joinFromLink();
+    }
+});
+
 watch(() => office.slug, async (slug) => {
     calls.detach();
     collapse();
@@ -252,7 +279,7 @@ watch(() => office.slug, async (slug) => {
 
             <template v-else>
                 <div class="call-tile local">
-                    <CallVideo v-if="localVideo" :stream="calls.localStream" muted mirror />
+                    <CallVideo v-if="localVideo" :stream="calls.localStream" muted :mirror="calls.cameraOn && !calls.sharing" />
                     <div v-else class="call-audio-avatar">
                         <PersonAvatar :person="auth.user" :name="auth.user?.name" size="large" />
                     </div>
@@ -277,6 +304,10 @@ watch(() => office.slug, async (slug) => {
             </template>
 
             <p v-if="calls.connection === 'connecting' && !calls.outgoing" class="call-connecting">Connecting…</p>
+
+            <button v-if="soundBlocked && !calls.outgoing" type="button" class="call-sound" @click="pumpAudio">
+                <i class="pi pi-volume-up" /> Enable sound
+            </button>
         </div>
 
         <footer class="call-controls">
