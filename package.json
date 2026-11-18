@@ -8,6 +8,7 @@
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",
+        "@vitejs/plugin-vue": "^6.0.10",
         "axios": "^1.11.0",
         "concurrently": "^9.0.1",
         "laravel-vite-plugin": "^2.0.0",
@@ -25,7 +26,6 @@
         "@tiptap/starter-kit": "^3.34.0",
         "@tiptap/suggestion": "^3.34.0",
         "@tiptap/vue-3": "^3.34.0",
-        "@vitejs/plugin-vue": "^6.0.10",
         "ably": "^2.30.0",
         "pinia": "^4.1.0",
         "primeicons": "^8.0.2",
