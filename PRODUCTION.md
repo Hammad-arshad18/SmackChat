@@ -41,8 +41,9 @@ business decisions that cannot live in the repository. Work top to bottom.
   `SMACKCHAT_CALL_ICE_SERVERS` to a comma-separated list; a STUN server is
   enough inside one office network, but remote people need a TURN server
   (for example coturn) or calls fail behind strict NAT/firewalls. Set
-  `SMACKCHAT_CALL_TURN_URL`, `SMACKCHAT_CALL_TURN_USERNAME`, and
-  `SMACKCHAT_CALL_TURN_CREDENTIAL` when your TURN server needs credentials.
+  `SMACKCHAT_CALL_TURN_URL` to one or more comma-separated TURN URLs, plus
+  `SMACKCHAT_CALL_TURN_USERNAME` and `SMACKCHAT_CALL_TURN_CREDENTIAL` when your
+  TURN server needs credentials (hosted TURN or coturn).
   There is no media server: every participant sends one stream to every other
   participant, so keep `SMACKCHAT_CALL_GROUP_LIMIT` at 8 or lower. The free
   plan is one-to-one; groups belong to the archive plan. Tapping a call push

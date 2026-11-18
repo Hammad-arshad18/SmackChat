@@ -206,6 +206,36 @@ class CallsTest extends TestCase
             ->assertJsonCount(0, 'calls');
     }
 
+    public function test_the_workspace_exposes_stun_and_credentialed_turn_servers(): void
+    {
+        [$owner, $workspace] = $this->office();
+
+        config()->set('smackchat.call_ice_servers', ['stun:stun.l.google.com:19302']);
+        config()->set('smackchat.call_turn_urls', [
+            'turn:relay.example.com:80',
+            'turns:relay.example.com:443?transport=tcp',
+        ]);
+        config()->set('smackchat.call_turn_username', 'smackchat');
+        config()->set('smackchat.call_turn_credential', 'relay-secret');
+
+        $ice = $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}")
+            ->assertOk()
+            ->json('workspace.calls.ice_servers');
+
+        $this->assertContains(['urls' => 'stun:stun.l.google.com:19302'], $ice);
+        $this->assertContains([
+            'urls' => 'turn:relay.example.com:80',
+            'username' => 'smackchat',
+            'credential' => 'relay-secret',
+        ], $ice);
+        $this->assertContains([
+            'urls' => 'turns:relay.example.com:443?transport=tcp',
+            'username' => 'smackchat',
+            'credential' => 'relay-secret',
+        ], $ice);
+    }
+
     public function test_the_owner_can_bring_a_workspace_ably_key_and_it_stays_secret(): void
     {
         [$owner, $workspace] = $this->office();

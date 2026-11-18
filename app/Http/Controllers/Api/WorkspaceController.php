@@ -166,9 +166,7 @@ class WorkspaceController extends ApiController
             config('smackchat.call_ice_servers', []),
         );
 
-        $turn = config('smackchat.call_turn_url');
-
-        if (filled($turn)) {
+        foreach (config('smackchat.call_turn_urls', []) as $turn) {
             $servers[] = array_filter([
                 'urls' => (string) $turn,
                 'username' => config('smackchat.call_turn_username'),

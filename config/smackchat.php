@@ -26,8 +26,12 @@ return [
     ))),
 
     // Optional TURN relay for people behind strict NAT/firewalls. Leave blank
-    // to use STUN only. A TURN server needs long-term credentials.
-    'call_turn_url' => env('SMACKCHAT_CALL_TURN_URL'),
+    // to use STUN only. A TURN server needs long-term credentials. The URL list
+    // is comma-separated so one credential can cover UDP, TCP, and TLS.
+    'call_turn_urls' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string) env('SMACKCHAT_CALL_TURN_URL', '')),
+    ))),
     'call_turn_username' => env('SMACKCHAT_CALL_TURN_USERNAME'),
     'call_turn_credential' => env('SMACKCHAT_CALL_TURN_CREDENTIAL'),
 ];
