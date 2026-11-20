@@ -11,6 +11,7 @@ const props = defineProps({
 const emit = defineEmits(['blocked', 'playing']);
 
 const el = ref(null);
+const bound = new WeakSet();
 
 function play(node) {
     if (!node?.srcObject) {
@@ -37,8 +38,13 @@ function bind(stream) {
         node.srcObject = stream || null;
     }
 
+    // addEventListener, not onunmute: the call store listens on the same
+    // tracks, and assigning the handler here used to replace the store's.
     stream?.getTracks?.().forEach((track) => {
-        track.onunmute = () => play(node);
+        if (!bound.has(track)) {
+            bound.add(track);
+            track.addEventListener('unmute', () => play(el.value));
+        }
     });
 
     play(node);

@@ -11,6 +11,23 @@ const RING_TIMEOUT_MS = 45000;
 const ANSWER_TIMEOUT_MS = 60000;
 const SIGNAL_POLL_MS = 700;
 const SYNC_MS = 1000;
+const ANSWER_WAIT_MS = 8000;
+const OFFER_WAIT_MS = 5000;
+const DISCONNECT_GRACE_MS = 4000;
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function xsrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+
+    return match ? decodeURIComponent(match[1]) : '';
+}
+
+function newSession() {
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function notice(message) {
     window.dispatchEvent(new CustomEvent('smack-call-notice', { detail: { message } }));
@@ -86,6 +103,12 @@ export const useCallStore = defineStore('calls', () => {
     let refreshing = false;
     let incomingTimer = null;
     let outgoingTimer = null;
+    // False until the microphone is open. A peer built before that has no
+    // audio sender, and the other person never hears this side.
+    let mediaReady = false;
+    // Changes with every join. It rides on each signal so the other side can
+    // tell a refreshed tab from the old one and rebuild its connection.
+    let mySession = '';
 
     function attach() {
         if (attached || !office.slug) {
@@ -94,6 +117,8 @@ export const useCallStore = defineStore('calls', () => {
 
         attached = true;
         window.addEventListener('smack-call', onRealtimeCall);
+        window.addEventListener('pagehide', onPageHide);
+        navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
         refreshActive();
         joinFromLink();
         ringTimer = setInterval(refreshActive, realtimeConnected() ? 20000 : 10000);
@@ -107,6 +132,8 @@ export const useCallStore = defineStore('calls', () => {
 
         attached = false;
         window.removeEventListener('smack-call', onRealtimeCall);
+        window.removeEventListener('pagehide', onPageHide);
+        navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
         clearInterval(ringTimer);
         clearInterval(clockTimer);
         ringTimer = null;
@@ -233,12 +260,61 @@ export const useCallStore = defineStore('calls', () => {
             return;
         }
 
-        if (call.value?.id === id) {
-            if (payload.event === 'call.signal') {
-                fetchSignals();
-            } else {
-                syncCall();
+        if (payload.event === 'call.declined') {
+            if (call.value?.id === id && Number(payload.user_id) !== Number(myId.value) && outgoing.value) {
+                const who = activeCalls.value.find((item) => item.id === id)?.channel_label;
+                notice(who ? `${who} declined the call.` : 'Call declined.');
             }
+
+            return;
+        }
+
+        // Until the mic is open, leave signals on the server. The poll that
+        // starts after openMedia() reads them with a working audio sender.
+        if (call.value?.id !== id || !mediaReady) {
+            return;
+        }
+
+        if (payload.event === 'call.signal') {
+            // Every member hears every nudge; only fetch the ones meant for us.
+            if (payload.to === undefined || Number(payload.to) === Number(myId.value)) {
+                fetchSignals();
+            }
+
+            return;
+        }
+
+        if (payload.event === 'call.joined' && payload.rejoin && Number(payload.user_id) !== Number(myId.value)) {
+            // They refreshed or rejoined. The old connection points at a tab
+            // that is gone; start over with them.
+            closePeer(payload.user_id);
+        }
+
+        syncCall();
+    }
+
+    /**
+     * Free the seat when the tab closes or reloads, so the others drop the
+     * dead connection at once instead of after the stale timeout.
+     */
+    function onPageHide(event) {
+        if (!call.value || !workspaceSlug || event.persisted) {
+            return;
+        }
+
+        try {
+            fetch(`/api/workspaces/${workspaceSlug}/calls/${call.value.id}/leave`, {
+                method: 'POST',
+                credentials: 'include',
+                keepalive: true,
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-XSRF-TOKEN': xsrfToken(),
+                },
+            });
+        } catch {
+            /* the server prunes the seat later */
         }
     }
 
@@ -282,11 +358,29 @@ export const useCallStore = defineStore('calls', () => {
             return;
         }
 
+        const declining = url.searchParams.get('decline') === '1';
         url.searchParams.delete('call');
+        url.searchParams.delete('decline');
         window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+
+        if (declining) {
+            decline(id);
+
+            return;
+        }
 
         if (!call.value && !busy.value) {
             joinById(id);
+        }
+    }
+
+    async function decline(id, slug = office.slug) {
+        dismissed.add(id);
+
+        try {
+            await api.post(`/workspaces/${slug}/calls/${id}/decline`);
+        } catch {
+            /* the caller's own timeout ends it */
         }
     }
 
@@ -330,8 +424,9 @@ export const useCallStore = defineStore('calls', () => {
 
     function declineIncoming() {
         if (incoming.value) {
-            dismissed.add(incoming.value.id);
+            const id = incoming.value.id;
             clearIncoming();
+            decline(id);
         }
     }
 
@@ -365,6 +460,8 @@ export const useCallStore = defineStore('calls', () => {
         dismissed.delete(payload.id);
         joinedAt = Date.now();
         lastSignalId = 0;
+        mediaReady = false;
+        mySession = newSession();
         connection.value = 'connecting';
 
         try {
@@ -374,12 +471,25 @@ export const useCallStore = defineStore('calls', () => {
                 ? 'Microphone or camera permission was blocked.'
                 : (failure?.message || 'Could not open your microphone.');
             notice(error.value);
-            await leaveServer(payload.id, workspaceSlug);
+            const slug = workspaceSlug;
+            // Clear local state first so the "call ended" nudge that our own
+            // leave triggers does not raise a second message.
             cleanup();
+            await leaveServer(payload.id, slug);
 
             return;
         }
 
+        // The call may have ended or been left while the permission prompt
+        // was open.
+        if (call.value?.id !== payload.id) {
+            local?.getTracks().forEach((track) => track.stop());
+            local = null;
+
+            return;
+        }
+
+        mediaReady = true;
         connectPeers();
         connection.value = 'connecting';
         startTimers();
@@ -434,13 +544,126 @@ export const useCallStore = defineStore('calls', () => {
         }
 
         micOn.value = local.getAudioTracks().every((track) => track.enabled);
+        watchMic();
         refreshPreview();
     }
 
-    function connectPeers() {
-        for (const person of others.value) {
-            ensurePeer(person.user_id);
+    /**
+     * A Bluetooth headset connecting, a USB mic unplugged, or iOS taking the
+     * mic for the camera ends the audio track. Without a new one this side
+     * goes silent and nobody is told.
+     */
+    function watchMic() {
+        const track = local?.getAudioTracks()[0];
+
+        if (track) {
+            track.addEventListener('ended', () => reopenMic(track), { once: true });
         }
+    }
+
+    async function reopenMic(dead) {
+        if (!local || !call.value || (dead && !local.getAudioTracks().includes(dead))) {
+            return;
+        }
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            });
+            const track = stream.getAudioTracks()[0];
+
+            if (!track || !local) {
+                track?.stop();
+
+                return;
+            }
+
+            local.getAudioTracks().forEach((old) => {
+                local.removeTrack(old);
+
+                if (old !== track) {
+                    old.stop();
+                }
+            });
+            track.enabled = micOn.value;
+            local.addTrack(track);
+            watchMic();
+
+            await Promise.all([...peers.values()].map(async (state) => {
+                const sender = audioTransceiver(state.pc)?.sender;
+
+                if (sender) {
+                    await sender.replaceTrack(track).catch(() => {});
+                }
+            }));
+
+            refreshPreview();
+        } catch {
+            notice('Your microphone stopped. Check it and rejoin the call.');
+        }
+    }
+
+    function onDeviceChange() {
+        const track = local?.getAudioTracks()[0];
+
+        if (call.value && track && track.readyState === 'ended') {
+            reopenMic(track);
+        }
+    }
+
+    function connectPeers() {
+        if (!mediaReady) {
+            return;
+        }
+
+        for (const person of others.value) {
+            const state = ensurePeer(person.user_id);
+            attachLocalAudio(state);
+        }
+    }
+
+    function audioTransceiver(pc) {
+        return pc.getTransceivers().find((item) => {
+            const kind = item.sender?.track?.kind || item.receiver?.track?.kind;
+
+            return kind === 'audio';
+        }) || null;
+    }
+
+    /**
+     * Backstop for a peer built before the mic was open: put the mic on its
+     * audio sender and renegotiate so the other side starts hearing us.
+     */
+    function attachLocalAudio(state) {
+        const audio = local?.getAudioTracks()[0];
+        const pc = state?.pc;
+
+        if (!audio || !pc || pc.signalingState === 'closed') {
+            return;
+        }
+
+        if (pc.getSenders().some((sender) => sender.track?.kind === 'audio')) {
+            return;
+        }
+
+        const transceiver = audioTransceiver(pc);
+
+        if (!transceiver) {
+            pc.addTrack(audio, local);
+
+            return;
+        }
+
+        enqueue(state, async () => {
+            await transceiver.sender.replaceTrack(audio);
+            transceiver.sender.setStreams?.(local);
+
+            if (transceiver.direction !== 'sendrecv') {
+                // Changing the direction fires negotiationneeded, which sends a
+                // fresh offer (or asks the offerer for one).
+                transceiver.direction = 'sendrecv';
+            }
+        });
     }
 
     /**
@@ -473,12 +696,20 @@ export const useCallStore = defineStore('calls', () => {
         return screenTrack || cameraTrack || null;
     }
 
+    /**
+     * Only the offerer creates the video m-line. On the answerer the browser
+     * builds it from the offer; a transceiver added here beforehand would sit
+     * unused, and the camera put on it never reached the other side.
+     */
     async function armVideo(pc) {
-        let transceiver = pc.__video || videoTransceiver(pc);
+        let transceiver = videoTransceiver(pc);
 
         if (!transceiver) {
+            if (!pc.__offerer) {
+                return null;
+            }
+
             transceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
-            pc.__video = transceiver;
         }
 
         if (transceiver.direction !== 'sendrecv') {
@@ -529,6 +760,118 @@ export const useCallStore = defineStore('calls', () => {
         connection.value = 'connecting';
     }
 
+    function clearPeerTimers(state) {
+        clearTimeout(state.answerTimer);
+        clearTimeout(state.offerTimer);
+        clearTimeout(state.disconnectTimer);
+        state.answerTimer = null;
+        state.offerTimer = null;
+        state.disconnectTimer = null;
+    }
+
+    function closePeer(peerId, { keepStream = false } = {}) {
+        const key = Number(peerId);
+        const state = peers.get(key);
+
+        if (!state) {
+            return;
+        }
+
+        clearPeerTimers(state);
+        state.closed = true;
+
+        try {
+            state.pc.close();
+        } catch {
+            /* already closed */
+        }
+
+        peers.delete(key);
+
+        if (!keepStream) {
+            const next = { ...remoteStreams.value };
+            delete next[key];
+            remoteStreams.value = next;
+        }
+
+        updateConnection();
+    }
+
+    /**
+     * Send an offer now. Used for the first handshake, video changes, ICE
+     * restarts, and when an offer went unanswered.
+     */
+    async function offer(state, key, { iceRestart = false } = {}) {
+        const pc = state.pc;
+
+        if (state.closed || pc.signalingState !== 'stable') {
+            return;
+        }
+
+        state.makingOffer = true;
+
+        try {
+            await armVideo(pc);
+
+            if (pc.signalingState !== 'stable') {
+                return;
+            }
+
+            if (iceRestart) {
+                await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+            } else {
+                await pc.setLocalDescription();
+            }
+
+            await sendSignal(key, 'offer', pc.localDescription);
+            watchAnswer(state, key);
+        } finally {
+            state.makingOffer = false;
+        }
+    }
+
+    /**
+     * An offer whose answer was lost (rate limit, flaky network, a tab that
+     * reloaded) would leave this pair silent forever. Roll back and re-offer.
+     */
+    function watchAnswer(state, key) {
+        clearTimeout(state.answerTimer);
+        state.answerTimer = setTimeout(() => {
+            if (state.closed || state.pc.signalingState !== 'have-local-offer') {
+                return;
+            }
+
+            enqueue(state, async () => {
+                if (state.closed || state.pc.signalingState !== 'have-local-offer') {
+                    return;
+                }
+
+                await state.pc.setLocalDescription({ type: 'rollback' });
+                await offer(state, key);
+            });
+        }, ANSWER_WAIT_MS);
+    }
+
+    /**
+     * The answerer cannot start a handshake. It asks the offerer for one, and
+     * asks again if nothing arrives, which covers a lost first offer and an
+     * offerer still holding a connection to this tab's previous session.
+     */
+    function askForOffer(state, key, attempt = 0) {
+        clearTimeout(state.offerTimer);
+        sendSignal(key, 'refresh', { ask: 1, hello: 1 });
+
+        if (attempt >= 5) {
+            return;
+        }
+
+        state.offerTimer = setTimeout(() => {
+            if (!state.closed && !state.pc.remoteDescription) {
+                askForOffer(state, key, attempt + 1);
+            }
+        }, OFFER_WAIT_MS);
+    }
+
     function ensurePeer(peerId) {
         const key = Number(peerId);
 
@@ -540,6 +883,7 @@ export const useCallStore = defineStore('calls', () => {
             iceServers: iceServers(),
             bundlePolicy: 'max-bundle',
         });
+        pc.__offerer = isOfferer(key);
         const state = {
             pc,
             makingOffer: false,
@@ -549,6 +893,16 @@ export const useCallStore = defineStore('calls', () => {
             stream: new MediaStream(),
             chain: Promise.resolve(),
             lastRestart: 0,
+            remoteSession: '',
+            // Ids of this connection and of the one it is paired with. An
+            // offer or hello from a different remote connection means the
+            // other side started over, and so must we.
+            connId: newSession(),
+            remoteConn: '',
+            answerTimer: null,
+            offerTimer: null,
+            disconnectTimer: null,
+            closed: false,
         };
         peers.set(key, state);
 
@@ -556,11 +910,14 @@ export const useCallStore = defineStore('calls', () => {
 
         if (audio) {
             pc.addTrack(audio, local);
+        } else {
+            // Keep an audio m-line either way so a late mic can be attached
+            // with replaceTrack (see attachLocalAudio).
+            pc.addTransceiver('audio', { direction: 'sendrecv' });
         }
 
         // A video m-line from the start lets camera and screen share swap with
         // replaceTrack instead of a second handshake that can fail silently.
-        pc.__video = pc.addTransceiver('video', { direction: 'sendrecv' });
         armVideo(pc).catch((error) => console.error('[huddle] video setup failed', error));
 
         pc.onicecandidate = (event) => {
@@ -572,22 +929,21 @@ export const useCallStore = defineStore('calls', () => {
         pc.ontrack = (event) => {
             const stream = event.streams?.[0] || state.stream;
 
-            if (!event.streams?.[0]) {
-                if (!stream.getTracks().includes(event.track)) {
-                    stream.addTrack(event.track);
-                }
+            if (!stream.getTracks().includes(event.track)) {
+                stream.addTrack(event.track);
             }
 
             state.stream = stream;
             publishRemote(key, stream);
-            event.track.onunmute = () => publishRemote(key, stream);
-            event.track.onmute = () => publishRemote(key, stream);
-            event.track.onended = () => publishRemote(key, stream);
+            const refresh = () => publishRemote(key, stream);
+            event.track.addEventListener('unmute', refresh);
+            event.track.addEventListener('mute', refresh);
+            event.track.addEventListener('ended', refresh);
         };
 
         pc.onnegotiationneeded = () => {
             enqueue(state, async () => {
-                if (!local || !call.value || pc.signalingState !== 'stable') {
+                if (!local || !call.value || state.closed || pc.signalingState !== 'stable') {
                     return;
                 }
 
@@ -605,20 +961,10 @@ export const useCallStore = defineStore('calls', () => {
                     return;
                 }
 
-                state.makingOffer = true;
-
                 try {
-                    await armVideo(pc);
-                    if (pc.signalingState !== 'stable') {
-                        return;
-                    }
-
-                    await pc.setLocalDescription();
-                    await sendSignal(key, 'offer', pc.localDescription);
+                    await offer(state, key);
                 } catch (error) {
                     console.error('[huddle] offer failed', error);
-                } finally {
-                    state.makingOffer = false;
                 }
             });
         };
@@ -629,22 +975,76 @@ export const useCallStore = defineStore('calls', () => {
 
         pc.oniceconnectionstatechange = () => {
             updateConnection();
+            const ice = pc.iceConnectionState;
 
-            if (pc.iceConnectionState !== 'failed' || !isOfferer(key)) {
+            if (ice === 'connected' || ice === 'completed') {
+                clearTimeout(state.disconnectTimer);
+                state.disconnectTimer = null;
+
                 return;
             }
 
-            const now = Date.now();
+            if (ice === 'disconnected' && !state.disconnectTimer) {
+                // Chrome waits 15-30 seconds before calling this "failed".
+                // Restart sooner so a Wi-Fi to mobile data switch heals fast.
+                state.disconnectTimer = setTimeout(() => {
+                    state.disconnectTimer = null;
 
-            if (now - state.lastRestart < 5000) {
+                    if (!state.closed && pc.iceConnectionState === 'disconnected') {
+                        restartIce(state, key);
+                    }
+                }, DISCONNECT_GRACE_MS);
+
                 return;
             }
 
-            state.lastRestart = now;
-            pc.restartIce();
+            if (ice === 'failed') {
+                restartIce(state, key);
+            }
         };
 
+        pc.onconnectionstatechange = () => {
+            if (pc.connectionState !== 'failed' || state.closed || !call.value) {
+                return;
+            }
+
+            // An ICE restart did not help. Start a brand-new connection; the
+            // other side rebuilds when our next offer does not fit its old one.
+            if (isOfferer(key) && Date.now() - state.lastRestart > 3000) {
+                closePeer(key, { keepStream: true });
+                connectPeers();
+            }
+        };
+
+        if (!isOfferer(key) && local) {
+            askForOffer(state, key);
+        }
+
         return state;
+    }
+
+    function restartIce(state, key) {
+        const now = Date.now();
+
+        if (state.closed || now - state.lastRestart < 5000) {
+            return;
+        }
+
+        state.lastRestart = now;
+
+        if (!isOfferer(key)) {
+            sendSignal(key, 'refresh', { ask: 1, restart: 1 });
+
+            return;
+        }
+
+        enqueue(state, async () => {
+            if (state.pc.signalingState === 'have-local-offer') {
+                await state.pc.setLocalDescription({ type: 'rollback' });
+            }
+
+            await offer(state, key, { iceRestart: true });
+        });
     }
 
     async function senderNeedsOffer(pc) {
@@ -662,14 +1062,54 @@ export const useCallStore = defineStore('calls', () => {
     }
 
     function handleSignal(from, type, payload) {
-        const state = ensurePeer(from);
+        const key = Number(from);
+        const session = typeof payload?._s === 'string' ? payload._s : '';
+        const conn = typeof payload?._c === 'string' ? payload._c : '';
+        const startsOver = type === 'offer' || (type === 'refresh' && payload?.hello);
+        let state = peers.get(key);
+
+        // A signal from a newer session of that person means their tab was
+        // reloaded; an offer or hello from another connection means they
+        // rebuilt it. Our connection belongs to the old one: replace it.
+        const staleSession = session && state?.remoteSession && state.remoteSession !== session;
+        const staleConn = startsOver && conn && state?.remoteConn && state.remoteConn !== conn;
+
+        if (state && (staleSession || staleConn)) {
+            closePeer(key, { keepStream: true });
+            state = null;
+        }
+
+        state = state || ensurePeer(key);
+
+        if (session && !state.remoteSession) {
+            state.remoteSession = session;
+        }
+
+        if (conn && (type === 'offer' || type === 'answer' || (type === 'refresh' && payload?.hello))) {
+            state.remoteConn = conn;
+        }
 
         return enqueue(state, () => applySignal(state, from, type, payload));
     }
 
-    async function applySignal(state, from, type, payload) {
+    function stripSession(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return payload;
+        }
+
+        const { _s: _session, _c: _conn, ...rest } = payload;
+
+        return rest;
+    }
+
+    async function applySignal(state, from, type, raw) {
         const pc = state.pc;
         const key = Number(from);
+        const payload = stripSession(raw);
+
+        if (state.closed) {
+            return;
+        }
 
         if (type === 'status') {
             remoteSharing.value = {
@@ -681,18 +1121,27 @@ export const useCallStore = defineStore('calls', () => {
         }
 
         if (type === 'refresh') {
-            if (!isOfferer(key) || pc.signalingState !== 'stable') {
+            if (!isOfferer(key)) {
                 return;
             }
 
-            state.makingOffer = true;
+            if (payload?.restart) {
+                if (pc.signalingState === 'stable') {
+                    state.lastRestart = Date.now();
+                    await offer(state, key, { iceRestart: true });
+                }
 
-            try {
-                await armVideo(pc);
-                await pc.setLocalDescription();
-                await sendSignal(key, 'offer', pc.localDescription);
-            } finally {
-                state.makingOffer = false;
+                return;
+            }
+
+            // A hello from a tab that has a connection with us already: our
+            // offer reached it or will; the answer watchdog covers a loss.
+            if (payload?.hello && pc.signalingState === 'have-local-offer') {
+                return;
+            }
+
+            if (pc.signalingState === 'stable') {
+                await offer(state, key);
             }
 
             return;
@@ -711,8 +1160,10 @@ export const useCallStore = defineStore('calls', () => {
 
             try {
                 await pc.addIceCandidate(payload);
-            } catch (error) {
-                console.error('[huddle] ice candidate failed', error);
+            } catch {
+                // After an ICE restart a candidate can beat its offer. Keep it
+                // for when the new description lands.
+                state.pending.push(payload);
             }
 
             return;
@@ -737,17 +1188,45 @@ export const useCallStore = defineStore('calls', () => {
 
         state.ignoreOffer = false;
 
+        if (type === 'answer' && pc.signalingState !== 'have-local-offer') {
+            // A late answer to an offer we already rolled back.
+            return;
+        }
+
         try {
             await pc.setRemoteDescription(description(payload));
         } catch (error) {
-            if (!(state.polite && type === 'offer' && pc.signalingState === 'have-local-offer')) {
+            if (state.polite && type === 'offer' && pc.signalingState === 'have-local-offer') {
+                await pc.setLocalDescription({ type: 'rollback' });
+                await pc.setRemoteDescription(description(payload));
+            } else if (type === 'offer') {
+                // The offer comes from a different connection than the one we
+                // hold (the other side rebuilt). Start fresh and accept it.
+                console.warn('[huddle] rebuilding connection after a mismatched offer', error?.message);
+                const { remoteSession, remoteConn } = state;
+                closePeer(key, { keepStream: true });
+                const fresh = ensurePeer(key);
+                fresh.remoteSession = remoteSession;
+                fresh.remoteConn = remoteConn;
+                clearTimeout(fresh.offerTimer);
+                await applySignal(fresh, from, type, payload);
+
+                return;
+            } else {
                 console.error('[huddle] signal failed', type, error);
 
                 return;
             }
+        }
 
-            await pc.setLocalDescription({ type: 'rollback' });
-            await pc.setRemoteDescription(description(payload));
+        if (type === 'answer') {
+            clearTimeout(state.answerTimer);
+            state.answerTimer = null;
+        }
+
+        if (type === 'offer') {
+            clearTimeout(state.offerTimer);
+            state.offerTimer = null;
         }
 
         for (const candidate of state.pending.splice(0)) {
@@ -770,15 +1249,25 @@ export const useCallStore = defineStore('calls', () => {
             return;
         }
 
-        const body = (type === 'offer' || type === 'answer')
-            ? { to: Number(to), type, payload: description(payload) }
-            : { to: Number(to), type, payload };
+        const id = call.value.id;
+        const slug = workspaceSlug;
+        const base = (type === 'offer' || type === 'answer') ? description(payload) : { ...payload };
+        const body = {
+            to: Number(to),
+            type,
+            payload: { ...base, _s: mySession, _c: peers.get(Number(to))?.connId || '' },
+        };
 
         let lastError = null;
+        const deadline = Date.now() + 6000;
 
-        for (let attempt = 0; attempt < 3; attempt += 1) {
+        for (let attempt = 0; Date.now() < deadline; attempt += 1) {
+            if (call.value?.id !== id) {
+                return;
+            }
+
             try {
-                await api.post(`/workspaces/${workspaceSlug}/calls/${call.value.id}/signal`, body);
+                await api.post(`/workspaces/${slug}/calls/${id}/signal`, body);
 
                 return;
             } catch (error) {
@@ -789,7 +1278,9 @@ export const useCallStore = defineStore('calls', () => {
                     break;
                 }
 
-                await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+                const retryAfter = Number(error?.response?.headers?.['retry-after']) * 1000;
+                const wait = retryAfter > 0 ? Math.min(retryAfter, 3000) : Math.min(250 * 2 ** attempt, 2000);
+                await sleep(wait);
             }
         }
 
@@ -797,7 +1288,7 @@ export const useCallStore = defineStore('calls', () => {
     }
 
     async function fetchSignals() {
-        if (!call.value || signalBusy || !workspaceSlug) {
+        if (!call.value || !mediaReady || signalBusy || !workspaceSlug) {
             return;
         }
 
@@ -820,7 +1311,7 @@ export const useCallStore = defineStore('calls', () => {
     }
 
     async function syncCall() {
-        if (!call.value || syncBusy || !workspaceSlug) {
+        if (!call.value || !mediaReady || syncBusy || !workspaceSlug) {
             return;
         }
 
@@ -852,13 +1343,9 @@ export const useCallStore = defineStore('calls', () => {
     function prunePeers() {
         const seated = new Set(others.value.map((person) => Number(person.user_id)));
 
-        for (const [peerId, state] of peers.entries()) {
+        for (const peerId of [...peers.keys()]) {
             if (!seated.has(peerId)) {
-                state.pc.close();
-                peers.delete(peerId);
-                const next = { ...remoteStreams.value };
-                delete next[peerId];
-                remoteStreams.value = next;
+                closePeer(peerId);
                 const sharingNext = { ...remoteSharing.value };
                 delete sharingNext[peerId];
                 remoteSharing.value = sharingNext;
@@ -917,6 +1404,9 @@ export const useCallStore = defineStore('calls', () => {
         stopTimers();
 
         for (const state of peers.values()) {
+            clearPeerTimers(state);
+            state.closed = true;
+
             try {
                 state.pc.close();
             } catch {
@@ -925,6 +1415,8 @@ export const useCallStore = defineStore('calls', () => {
         }
 
         peers.clear();
+        mediaReady = false;
+        mySession = '';
         remoteStreams.value = {};
         remoteSharing.value = {};
 
@@ -975,21 +1467,7 @@ export const useCallStore = defineStore('calls', () => {
             }
 
             if (isOfferer(peerId)) {
-                enqueue(state, async () => {
-                    if (state.pc.signalingState !== 'stable') {
-                        return;
-                    }
-
-                    state.makingOffer = true;
-
-                    try {
-                        await armVideo(state.pc);
-                        await state.pc.setLocalDescription();
-                        await sendSignal(peerId, 'offer', state.pc.localDescription);
-                    } finally {
-                        state.makingOffer = false;
-                    }
-                });
+                enqueue(state, () => offer(state, peerId));
 
                 continue;
             }

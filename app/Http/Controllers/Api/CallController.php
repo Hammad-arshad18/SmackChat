@@ -70,6 +70,14 @@ class CallController extends ApiController
         return response()->json(['left' => true]);
     }
 
+    public function decline(Request $request, string $workspace, Call $call, CallService $calls, ChannelAccess $access)
+    {
+        $this->ensureCall($request, $call, $access);
+        $calls->decline($call, $request->user());
+
+        return response()->json(['declined' => true]);
+    }
+
     public function signal(Request $request, string $workspace, Call $call, CallService $calls, ChannelAccess $access)
     {
         $this->ensureCall($request, $call, $access);

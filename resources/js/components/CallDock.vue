@@ -19,6 +19,9 @@ const expanded = ref(false);
 const soundBlocked = ref(false);
 const pinned = ref(null);
 const manualPin = ref(false);
+// Phones (and some desktop browsers) cannot share a screen at all.
+const canShare = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getDisplayMedia);
+let dockObserver = null;
 let baseTitle = '';
 let titleTimer = null;
 let titleFlip = false;
@@ -234,6 +237,29 @@ function ringTitle(payload) {
     }, 1600);
 }
 
+/**
+ * Publish the dock's height so the chat can keep its composer above a docked
+ * call on a phone instead of hiding Send under it.
+ */
+function trackDockHeight(node) {
+    dockObserver?.disconnect();
+    dockObserver = null;
+    const root = document.documentElement;
+
+    if (!node || typeof ResizeObserver === 'undefined') {
+        root.style.removeProperty('--call-dock-h');
+
+        return;
+    }
+
+    dockObserver = new ResizeObserver(() => {
+        root.style.setProperty('--call-dock-h', `${Math.ceil(node.getBoundingClientRect().height)}px`);
+    });
+    dockObserver.observe(node);
+}
+
+watch(dock, trackDockHeight);
+
 watch(() => calls.incoming, (payload) => {
     ringTitle(payload);
     notifyIncoming(payload);
@@ -296,6 +322,7 @@ onBeforeUnmount(() => {
     document.removeEventListener('fullscreenchange', onFullscreenChange);
     restoreTitle();
     closeNotification();
+    trackDockHeight(null);
     calls.detach();
 });
 
@@ -367,7 +394,7 @@ watch(() => office.slug, async (slug) => {
                         :fit="tile.share ? 'contain' : 'cover'"
                         :class="{ 'is-audio': !tile.video }"
                         @blocked="soundBlocked = true"
-                        @playing="soundBlocked = false"
+                        @playing="pumpAudio"
                     />
                     <div v-if="!tile.video" class="call-audio-avatar">
                         <PersonAvatar :person="tile.person" :name="tile.name" :size="focusTile?.id === tile.id ? 'xlarge' : 'large'" />
@@ -393,7 +420,7 @@ watch(() => office.slug, async (slug) => {
             <p v-else-if="calls.connection === 'connecting' && !waiting" class="call-connecting">Connecting…</p>
 
             <button v-if="soundBlocked && !waiting" type="button" class="call-sound" @click.stop="pumpAudio">
-                <i class="pi pi-volume-up" /> Enable sound
+                <i class="pi pi-volume-up" /> Tap to hear the call
             </button>
         </div>
 
@@ -417,6 +444,7 @@ watch(() => office.slug, async (slug) => {
                 @click="calls.toggleCamera()"
             />
             <Button
+                v-if="canShare"
                 icon="pi pi-desktop"
                 rounded
                 :severity="calls.sharing ? 'success' : 'secondary'"

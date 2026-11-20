@@ -79,42 +79,110 @@ class WebPushNotifier
      */
     public function ring(Call $call, User $caller): void
     {
+        $subscriptions = $this->callSubscriptions($call, [$caller->id]);
+
+        if ($subscriptions === null) {
+            return;
+        }
+
+        if ($subscriptions->isEmpty()) {
+            // Without this line a callee who never turned alerts on looks
+            // exactly like a delivery failure.
+            Log::info('Call ring skipped: no callee has push alerts on.', ['call_id' => $call->id]);
+
+            return;
+        }
+
+        $channel = $call->channel;
+        $isDm = $channel->type === Channel::DM;
+        $title = $isDm
+            ? ($call->kind === Call::VIDEO ? 'Incoming video call' : 'Incoming call')
+            : 'Incoming huddle';
+        $body = $isDm
+            ? $caller->name.' is calling'
+            : $caller->name.' started a huddle in #'.$channel->name;
+        $startedAt = $call->started_at ?? now();
+        $ringFor = max(30, (int) config('smackchat.call_ring_seconds', 75));
+
+        $payload = json_encode([
+            'type' => 'call',
+            'title' => $title,
+            'body' => $body,
+            'url' => '/w/'.$channel->workspace->slug.'/c/'.$channel->slug.'?call='.$call->id,
+            'tag' => 'smack-call-'.$call->id,
+            'call_id' => $call->id,
+            'workspace' => $channel->workspace->slug,
+            'kind' => $call->kind,
+            'started_at' => $startedAt->getTimestampMs(),
+            'expires_at' => $startedAt->copy()->addSeconds($ringFor)->getTimestampMs(),
+        ], JSON_UNESCAPED_UNICODE);
+
+        // A ring is worthless a minute later. Keep it short-lived and give it a
+        // topic so the "call ended" push replaces it if it is still queued.
+        $this->deliver($subscriptions, $payload, [
+            'TTL' => $ringFor,
+            'urgency' => 'high',
+            'topic' => 'call-'.$call->id,
+        ]);
+    }
+
+    /**
+     * Tell closed apps the call is over so the ringing notification goes away.
+     */
+    public function cancelRing(Call $call): void
+    {
+        // People who were in the call already know it ended. Only the ones
+        // who were rung and never picked up still have a ringing notification.
+        $joined = $call->participants()->pluck('user_id')->push($call->started_by)->all();
+        $subscriptions = $this->callSubscriptions($call, $joined);
+
+        if ($subscriptions === null || $subscriptions->isEmpty()) {
+            return;
+        }
+
+        $answered = count(array_unique($joined)) > 1;
+        $caller = $call->starter?->name ?? 'Someone';
+
+        $payload = json_encode([
+            'type' => 'call-ended',
+            'title' => $answered ? 'Call ended' : 'Missed call',
+            'body' => $answered ? 'The call has ended.' : 'Missed call from '.$caller,
+            'url' => '/w/'.$call->channel->workspace->slug.'/c/'.$call->channel->slug,
+            'tag' => 'smack-call-'.$call->id,
+            'call_id' => $call->id,
+            'answered' => $answered,
+        ], JSON_UNESCAPED_UNICODE);
+
+        $this->deliver($subscriptions, $payload, [
+            'TTL' => 60 * 60,
+            'urgency' => 'high',
+            'topic' => 'call-'.$call->id,
+        ]);
+    }
+
+    /**
+     * Everyone who could be rung for this call, minus the given people.
+     *
+     * @param  array<int, int>  $exceptUserIds
+     * @return Collection<int, PushSubscription>|null
+     */
+    private function callSubscriptions(Call $call, array $exceptUserIds): ?Collection
+    {
         $call->loadMissing(['channel.workspace']);
         $channel = $call->channel;
 
         if (! $channel || ! $channel->workspace) {
-            return;
+            return null;
         }
 
         $recipientIds = $channel->isOpen()
             ? DB::table('workspace_members')->where('workspace_id', $channel->workspace_id)->pluck('user_id')
             : $channel->members()->pluck('users.id');
 
-        $subscriptions = PushSubscription::query()
+        return PushSubscription::query()
             ->whereIn('user_id', $recipientIds)
-            ->where('user_id', '!=', $caller->id)
+            ->whereNotIn('user_id', $exceptUserIds)
             ->get();
-
-        if ($subscriptions->isEmpty()) {
-            return;
-        }
-
-        $isDm = $channel->type === Channel::DM;
-        $title = $isDm ? 'Incoming call' : 'Incoming huddle';
-        $body = $isDm
-            ? $caller->name.' is calling'
-            : $caller->name.' started a huddle in #'.$channel->name;
-
-        $payload = json_encode([
-            'title' => $title,
-            'body' => $body,
-            'url' => '/w/'.$channel->workspace->slug.'/c/'.$channel->slug.'?call='.$call->id,
-            'tag' => 'smack-call-'.$call->id,
-            'call_id' => $call->id,
-            'kind' => $call->kind,
-        ], JSON_UNESCAPED_UNICODE);
-
-        $this->deliver($subscriptions, $payload);
     }
 
     /**
@@ -138,9 +206,10 @@ class WebPushNotifier
 
     /**
      * @param  Collection<int, PushSubscription>  $subscriptions
+     * @param  array<string, mixed>  $options  TTL, urgency and topic for this push
      * @return array{sent: int, failed: int}
      */
-    private function deliver(Collection $subscriptions, string $payload): array
+    private function deliver(Collection $subscriptions, string $payload, array $options = []): array
     {
         $result = ['sent' => 0, 'failed' => 0];
 
@@ -188,6 +257,7 @@ class WebPushNotifier
                         'contentEncoding' => $subscription->content_encoding ?: 'aes128gcm',
                     ]),
                     $payload,
+                    $options,
                 );
             } catch (Throwable $exception) {
                 $result['failed']++;

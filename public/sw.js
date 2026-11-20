@@ -1,5 +1,5 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v10';
+const CACHE = 'smack-static-v11';
 const PRECACHE = [
     '/offline.html',
     '/favicon.png',
@@ -99,19 +99,58 @@ self.addEventListener('message', (event) => {
     });
 });
 
+const ICON = '/icons/smack-192.png';
+const RING_VIBRATE = [600, 300, 600, 300, 600, 300, 600, 300, 600, 300, 600];
+
 function notificationOptions(payload) {
-    const isCall = Boolean(payload.call_id);
+    const isCall = payload.type === 'call' || (Boolean(payload.call_id) && payload.type !== 'call-ended');
 
     return {
         body: payload.body || 'New message',
-        icon: new URL('/icons/smack-192.png', self.location.origin).href,
+        icon: new URL(ICON, self.location.origin).href,
+        badge: new URL(ICON, self.location.origin).href,
         tag: payload.tag || `smack-${Date.now()}`,
-        data: { url: payload.url || '/app', call_id: payload.call_id || null },
-        // Android keeps a call notification up until it is handled. iPhone
-        // rejects unknown options, so the push handler has a plain fallback.
+        data: {
+            url: payload.url || '/app',
+            call_id: payload.call_id || null,
+            workspace: payload.workspace || null,
+            kind: isCall ? 'call' : (payload.type || 'message'),
+        },
+        timestamp: payload.started_at || Date.now(),
+        // Android keeps a call notification up until it is handled and shows
+        // the Answer / Decline buttons. iPhone rejects unknown options, so the
+        // push handler has a plain fallback.
         requireInteraction: isCall,
-        vibrate: isCall ? [200, 100, 200, 100, 200] : undefined,
+        renotify: isCall ? true : undefined,
+        vibrate: isCall ? RING_VIBRATE : undefined,
+        actions: isCall
+            ? [
+                { action: 'answer', title: 'Answer' },
+                { action: 'decline', title: 'Decline' },
+            ]
+            : undefined,
     };
+}
+
+async function visibleWindow() {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+    return windows.some((client) => client.visibilityState === 'visible');
+}
+
+async function show(title, options) {
+    await self.registration.showNotification(title, options).catch(() => self.registration.showNotification(title, {
+        body: options.body,
+        tag: options.tag,
+        data: options.data,
+    }));
+}
+
+async function closeTagged(tag) {
+    const open = await self.registration.getNotifications({ tag });
+    open.forEach((item) => item.close());
+
+    return open.length;
 }
 
 self.addEventListener('push', (event) => {
@@ -126,49 +165,167 @@ self.addEventListener('push', (event) => {
     }
 
     const title = payload.title || 'SmackChat';
-    const options = notificationOptions(payload);
 
     // iPhone throws if it sees unsupported options such as renotify, and it
     // drops the subscription when a push does not display a notification.
     event.waitUntil((async () => {
+        if (payload.type === 'call-ended') {
+            const wasRinging = await closeTagged(payload.tag);
+
+            if (await visibleWindow()) {
+                return;
+            }
+
+            // Replace the ring with a quiet "Missed call" so the phone does not
+            // keep showing Answer for a call nobody can join any more.
+            if (wasRinging || !payload.answered) {
+                await show(title, {
+                    body: payload.body || '',
+                    icon: new URL(ICON, self.location.origin).href,
+                    tag: payload.tag,
+                    data: { url: payload.url || '/app', kind: 'call-ended' },
+                    silent: true,
+                });
+            }
+
+            return;
+        }
+
         if (payload.call_id) {
+            // A push that sat in the queue past the ring window is a missed
+            // call, not an incoming one.
+            if (payload.expires_at && Date.now() > Number(payload.expires_at)) {
+                if (!(await visibleWindow())) {
+                    await show('Missed call', {
+                        body: payload.body || '',
+                        icon: new URL(ICON, self.location.origin).href,
+                        tag: payload.tag,
+                        data: { url: (payload.url || '/app').replace(/[?&]call=\d+/, ''), kind: 'call-ended' },
+                        silent: true,
+                    });
+                }
+
+                return;
+            }
+
             // The open tab already shows the in-app ring; do not double-alert.
-            const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-            if (windows.some((client) => client.visibilityState === 'visible')) {
+            if (await visibleWindow()) {
                 return;
             }
         }
 
-        await self.registration.showNotification(title, options).catch(() => self.registration.showNotification(title, {
-            body: options.body,
-            tag: options.tag,
-            data: options.data,
-        }));
+        await show(title, notificationOptions(payload));
     })());
 });
 
+async function declineCall(data) {
+    if (!data?.call_id || !data?.workspace) {
+        return false;
+    }
+
+    try {
+        // The app's XSRF cookie is readable here through cookieStore (Chrome
+        // and Edge). Without it the request would be rejected, so fall back.
+        const cookie = self.cookieStore ? await self.cookieStore.get('XSRF-TOKEN') : null;
+
+        if (!cookie?.value) {
+            return false;
+        }
+
+        const response = await fetch(`/api/workspaces/${encodeURIComponent(data.workspace)}/calls/${Number(data.call_id)}/decline`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-XSRF-TOKEN': decodeURIComponent(cookie.value),
+            },
+        });
+
+        return response.ok;
+    } catch {
+        return false;
+    }
+}
+
+async function focusOrOpen(path) {
+    const target = new URL(path, self.location.origin).href;
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = windows.filter((client) => {
+        try {
+            return new URL(client.url).origin === self.location.origin;
+        } catch {
+            return false;
+        }
+    });
+    const client = open.find((item) => item.visibilityState === 'visible') || open[0];
+
+    if (!client) {
+        await self.clients.openWindow(target);
+        return;
+    }
+
+    client.postMessage({ type: 'navigate', url: path });
+    await client.focus();
+}
+
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
-    const path = event.notification.data?.url || '/app';
-    const target = new URL(path, self.location.origin).href;
+    const data = event.notification.data || {};
+    const path = data.url || '/app';
 
     event.waitUntil((async () => {
-        const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-        const open = windows.filter((client) => {
-            try {
-                return new URL(client.url).origin === self.location.origin;
-            } catch {
-                return false;
+        if (event.action === 'decline') {
+            if (await declineCall(data)) {
+                return;
             }
-        });
-        const client = open.find((item) => item.visibilityState === 'visible') || open[0];
 
-        if (!client) {
-            await self.clients.openWindow(target);
+            // No cookie access in this browser: let the app send the decline.
+            const separator = path.includes('?') ? '&' : '?';
+            await focusOrOpen(`${path}${separator}decline=1`);
             return;
         }
 
-        client.postMessage({ type: 'navigate', url: path });
-        await client.focus();
+        await focusOrOpen(path);
+    })());
+});
+
+// The browser can rotate a subscription while the app is closed. Save the new
+// one right away, or this phone stops getting calls until the app is opened.
+self.addEventListener('pushsubscriptionchange', (event) => {
+    event.waitUntil((async () => {
+        try {
+            const old = event.oldSubscription;
+            const key = old?.options?.applicationServerKey;
+            const fresh = event.newSubscription || (key
+                ? await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
+                : null);
+
+            if (!fresh) {
+                return;
+            }
+
+            const cookie = self.cookieStore ? await self.cookieStore.get('XSRF-TOKEN') : null;
+            const json = fresh.toJSON();
+
+            await fetch('/api/push/subscription', {
+                method: 'PUT',
+                credentials: 'include',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    ...(cookie?.value ? { 'X-XSRF-TOKEN': decodeURIComponent(cookie.value) } : {}),
+                },
+                body: JSON.stringify({
+                    endpoint: json.endpoint,
+                    public_key: json.keys?.p256dh,
+                    auth_token: json.keys?.auth,
+                    content_encoding: 'aes128gcm',
+                }),
+            });
+        } catch {
+            /* the app re-subscribes the next time it opens */
+        }
     })());
 });

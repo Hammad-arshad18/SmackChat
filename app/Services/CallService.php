@@ -33,7 +33,9 @@ class CallService
 
     public function start(Channel $channel, User $user, string $kind): Call
     {
-        return DB::transaction(function () use ($channel, $user, $kind) {
+        $created = false;
+
+        $call = DB::transaction(function () use ($channel, $user, $kind, &$created) {
             // Two people pressing "start" at once should share one huddle, not
             // create two. Lock the channel row before looking for a live call.
             Channel::query()->lockForUpdate()->findOrFail($channel->id);
@@ -59,18 +61,25 @@ class CallService
                 'started_by' => $call->started_by,
             ]);
 
+            $created = true;
+
+            return $call->fresh();
+        });
+
+        if ($created) {
             // A closed tab cannot ring, but a push notification can bring the
             // callee back into the app. Never let that delay the call itself.
-            defer(function () use ($call, $user): void {
+            $push = $this->push;
+            defer(function () use ($push, $call, $user): void {
                 try {
-                    app(WebPushNotifier::class)->ring($call, $user);
+                    $push->ring($call, $user);
                 } catch (Throwable $exception) {
                     report($exception);
                 }
             });
+        }
 
-            return $call->fresh();
-        });
+        return $call;
     }
 
     public function join(Call $call, User $user): Call
@@ -81,6 +90,8 @@ class CallService
             abort_if($locked->status === Call::ENDED, 410, 'That huddle has ended.');
 
             $this->pruneStale($locked);
+
+            abort_if($locked->status === Call::ENDED, 410, 'That huddle has ended.');
 
             $seated = $locked->participants()
                 ->where('user_id', $user->id)
@@ -93,16 +104,29 @@ class CallService
                     : 'The free plan allows one-to-one huddles. The forever archive plan adds group huddles.');
             }
 
+            // A join is a new browser session. Offers, answers and candidates
+            // left over from an earlier tab belong to a peer connection that
+            // no longer exists; replaying them breaks the new handshake.
+            $locked->signals()
+                ->where(fn ($query) => $query->where('to_user_id', $user->id)->orWhere('from_user_id', $user->id))
+                ->delete();
+
+            $joinedAt = now();
+
             CallParticipant::updateOrCreate(
                 ['call_id' => $locked->id, 'user_id' => $user->id],
-                ['joined_at' => now(), 'left_at' => null, 'last_seen_at' => now()],
+                ['joined_at' => $joinedAt, 'left_at' => null, 'last_seen_at' => $joinedAt],
             );
 
             $locked->forceFill(['status' => Call::LIVE, 'ended_at' => null])->save();
 
-            if (! $seated) {
-                $this->nudge($locked, 'call.joined', ['user_id' => $user->id]);
-            }
+            // Always nudge, even for a rejoin: the others must drop their old
+            // connection to this person and build a fresh one.
+            $this->nudge($locked, 'call.joined', [
+                'user_id' => $user->id,
+                'session' => $joinedAt->toIso8601String(),
+                'rejoin' => $seated,
+            ]);
 
             return $locked->fresh();
         });
@@ -136,6 +160,58 @@ class CallService
         $call->signals()->delete();
 
         $this->nudge($call, $event);
+
+        // Take the ring off phones whose app is closed.
+        $push = $this->push;
+        defer(function () use ($push, $call): void {
+            try {
+                $push->cancelRing($call);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        });
+    }
+
+    /**
+     * The callee said no from the ring screen or the notification. A one-to-one
+     * call ends; in a channel huddle only the caller is told.
+     */
+    public function decline(Call $call, User $user): void
+    {
+        if ($call->status === Call::ENDED || $this->isSeated($call, $user)) {
+            return;
+        }
+
+        $call->loadMissing('channel');
+
+        $this->nudge($call, 'call.declined', ['user_id' => $user->id]);
+
+        if ($call->channel?->type === Channel::DM) {
+            $this->end($call, 'call.ended');
+        }
+    }
+
+    /**
+     * End calls nobody answered and calls whose people all went away. Runs
+     * from the scheduler so a caller who closed the tab does not leave phones
+     * ringing for a call that no one can join.
+     */
+    public function sweep(): int
+    {
+        $ended = 0;
+
+        Call::query()
+            ->where('status', Call::LIVE)
+            ->orderBy('id')
+            ->each(function (Call $call) use (&$ended) {
+                $this->pruneStale($call);
+
+                if ($call->status === Call::ENDED) {
+                    $ended++;
+                }
+            });
+
+        return $ended;
     }
 
     public function signal(Call $call, User $user, int $to, string $type, array $payload): void
@@ -293,7 +369,8 @@ class CallService
 
     /**
      * Drop people whose tab went away without saying goodbye, so a slot frees
-     * up and the participant list stays honest.
+     * up and the participant list stays honest. A call that rang out with no
+     * one answering ends here too.
      */
     public function pruneStale(Call $call): void
     {
@@ -304,8 +381,28 @@ class CallService
             ->where('last_seen_at', '<', $cutoff)
             ->update(['left_at' => now()]);
 
-        if ($call->status === Call::LIVE && $call->participants()->whereNull('left_at')->count() === 0) {
-            $call->forceFill(['status' => Call::ENDED, 'ended_at' => now()])->save();
+        if ($call->status !== Call::LIVE) {
+            return;
+        }
+
+        $seated = $call->participants()->whereNull('left_at')->count();
+
+        // A call that was just created has no participant row yet; the
+        // starter is being seated right now.
+        if ($seated === 0 && $call->participants()->exists()) {
+            $this->end($call);
+
+            return;
+        }
+
+        $ringFor = max(30, (int) config('smackchat.call_ring_seconds', 75));
+        $unanswered = $seated === 1
+            && $call->participants()->count() === 1
+            && $call->started_at !== null
+            && $call->started_at->lt(now()->subSeconds($ringFor));
+
+        if ($unanswered) {
+            $this->end($call);
         }
     }
 

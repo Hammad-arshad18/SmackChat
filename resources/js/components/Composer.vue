@@ -36,6 +36,11 @@ const emit = defineEmits(['send', 'typing']);
 
 const office = useOfficeStore();
 const toast = useToast();
+// A phone or tablet with only an on-screen keyboard. A tablet with a
+// trackpad or mouse keeps desktop behaviour (Enter sends).
+const touchKeyboard = typeof window !== 'undefined'
+    && window.matchMedia?.('(pointer: coarse)').matches
+    && !window.matchMedia?.('(any-pointer: fine)').matches;
 const emojis = ['👍', '❤️', '😄', '🎉', '✅', '👀', '🚀', '🔥', '✨', '🙏', '💡', '☕', '🎯', '🙌', '😅', '🫡', '🧠', '📌', '💬', '⚡'];
 const emojiPop = ref(null);
 const linkPop = ref(null);
@@ -159,6 +164,12 @@ const editor = useEditor({
         handleKeyDown(view, event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 if (mentionOpen.value) {
+                    return false;
+                }
+
+                // Phone keyboards have no Shift key. There, Enter is a new line
+                // and the Send button sends.
+                if (touchKeyboard) {
                     return false;
                 }
 
@@ -1114,6 +1125,7 @@ onBeforeUnmount(() => {
                 <span v-if="aiBadgeLabel" class="ai-ready-badge">{{ aiBadgeLabel }}</span>
                 <span class="composer-hint">
                     <template v-if="aiStatusLabel">{{ aiStatusLabel }}</template>
+                    <template v-else-if="touchKeyboard">Tap send when you're ready</template>
                     <template v-else>{{ canAttach ? 'Drop files here · Shift + Enter for a new line' : 'Shift + Enter for a new line' }}</template>
                 </span>
             </div>

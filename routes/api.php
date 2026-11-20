@@ -67,8 +67,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/calls/{call}', [CallController::class, 'show'])->whereNumber('call');
         Route::post('/calls/{call}/join', [CallController::class, 'join'])->whereNumber('call')->middleware('throttle:calls');
         Route::post('/calls/{call}/leave', [CallController::class, 'leave'])->whereNumber('call');
-        Route::post('/calls/{call}/signal', [CallController::class, 'signal'])->whereNumber('call')->middleware('throttle:calls');
-        Route::get('/calls/{call}/signals', [CallController::class, 'signals'])->whereNumber('call')->middleware('throttle:calls');
+        Route::post('/calls/{call}/decline', [CallController::class, 'decline'])->whereNumber('call')->middleware('throttle:calls');
+        Route::post('/calls/{call}/signal', [CallController::class, 'signal'])->whereNumber('call')->middleware('throttle:call-signals');
+        Route::get('/calls/{call}/signals', [CallController::class, 'signals'])->whereNumber('call')->middleware('throttle:call-signals');
 
         Route::get('/members', [MemberController::class, 'index']);
         Route::post('/invitations', [MemberController::class, 'invite'])->middleware('throttle:presence');

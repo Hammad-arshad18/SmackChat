@@ -17,6 +17,9 @@ return [
     // group huddles. Media is peer to peer, so this is a seat cap for the mesh.
     'call_group_limit' => (int) env('SMACKCHAT_CALL_GROUP_LIMIT', 8),
     'call_stale_seconds' => (int) env('SMACKCHAT_CALL_STALE_SECONDS', 120),
+    // A call nobody answered ends after this many seconds (the server side of
+    // the browser's 60-second "No answer").
+    'call_ring_seconds' => (int) env('SMACKCHAT_CALL_RING_SECONDS', 75),
 
     // Comma-separated STUN/TURN URLs. Add a TURN server when people are not on
     // the same office network; STUN alone cannot cross every firewall.

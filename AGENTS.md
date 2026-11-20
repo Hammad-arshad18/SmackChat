@@ -47,7 +47,10 @@ Shell and nav: `Shell.vue`, `WorkspaceNav.vue`. Router: `resources/js/router.js`
 - Ably channel `smackchat:ws:{workspaceId}:ch:{channelId}`, event `message`. No `ABLY_KEY`: the open chat polls. That is expected.
 - Huddle signals ride the same channel on event `call` (ring, joined, left, signal, ended). SDP/ICE rows live in `call_signals` and are also polled over HTTP, so calls work without Ably. The channel capability is unchanged; only the server publishes `call`. Signaling is not end to end: SDP/ICE is readable by the server and cleared when the call ends.
 - SDP must end with CRLF. Laravel's `TrimStrings` strips it, so the client appends it on send and receive and `CallService::signal` restores it before storing. Do not remove that guard: Chrome rejects the description with "Invalid SDP line" and the call connects to nothing.
-- A new call also sends a Web Push (`WebPushNotifier::ring`) so a closed tab is notified. Tapping it opens `/w/{slug}/c/{channel}?call={id}`; the client joins that call once and removes the query. A closed web app can notify, but it cannot ring like a native phone.
+- A new call also sends a Web Push (`WebPushNotifier::ring`) so a closed tab is notified. It has a short TTL, topic `call-{id}`, and an `expires_at`; the service worker shows Answer and Decline buttons on Android. Tapping it opens `/w/{slug}/c/{channel}?call={id}`; the client joins that call once and removes the query (`&decline=1` declines instead). When the call ends, `cancelRing` replaces the ring with "Missed call" for people who never joined. A closed web app can notify, but it cannot ring like a native phone.
+- Decline: `POST /calls/{id}/decline`. In a DM it ends the call; in a channel it only tells the caller (`call.declined`).
+- A call nobody answers ends after `SMACKCHAT_CALL_RING_SECONDS` (75). `smackchat:sweep-calls` runs every minute and does this even when the caller's tab is gone.
+- WebRTC: no peer connection is built until the mic is open (a peer built earlier had no audio sender, so audio went one way). Every signal carries `_s` (the tab's session) and `_c` (the connection); a new value means the other side reloaded or rebuilt, and the old connection is replaced. A join deletes that person's old signals and always publishes `call.joined` (`rejoin: true` when already seated). Signal polling has its own limiter, `call-signals`.
 - A workspace Ably key replaces `ABLY_KEY` for that office. Tokens are scoped to that workspace.
 - E2E search does not send the query string. The API returns recent visible rows; the browser decrypts and filters.
 - Push text for a user message is `New message`.
@@ -94,7 +97,7 @@ Serve is often `127.0.0.1:8001` when `:8000` is another app. Vite is port 5173. 
 ## Production ops
 
 - `PRODUCTION.md` is the launch checklist. Read it before the first customer.
-- Cron: `* * * * * php artisan schedule:run` runs history pruning, audit retention, and `smackchat:backup` (dump + files in `storage/app/backups`). Copy that directory off-site.
+- Cron: `* * * * * php artisan schedule:run` runs history pruning, audit retention, `smackchat:sweep-calls` (every minute), and `smackchat:backup` (dump + files in `storage/app/backups`). Copy that directory off-site.
 - No trusted proxy by default. Add real proxy IPs in `bootstrap/app.php`; never `'*'` (office presence and rate limits read the client IP).
 - `SECURITY`: password reset at `/api/forgot-password` and `/api/reset-password`; account export/delete at `/api/me/export` and `DELETE /api/me`; audit at `GET /api/workspaces/{slug}/audit` (owner/admin).
 - Tests: `SecurityTest` covers proxy spoofing, login lockout, reset, Ably capability, audit, export, deletion, backup, health.

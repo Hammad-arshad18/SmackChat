@@ -262,6 +262,21 @@ function inspectRow(row) {
     selectedRow.value = row;
     detailOpen.value = true;
 }
+
+// Phones have no hover, so the heatmap tooltip never shows. Tapping a day
+// with no record shows its hours here; a day with a record opens its details.
+const pickedDay = ref(null);
+
+function pickDay(cell) {
+    if (cell.row) {
+        pickedDay.value = null;
+        inspectRow(cell.row);
+
+        return;
+    }
+
+    pickedDay.value = cell;
+}
 </script>
 
 <template>
@@ -355,13 +370,17 @@ function inspectRow(row) {
                                         class="heat-cell"
                                         :class="[`level-${cell.level}`, { weekend: cell.weekend, today: cell.today }]"
                                         v-tooltip.top="cell.minutes ? `${formatFullDay(cell.date)} · ${minutesLabel(cell.minutes)}` : `${formatFullDay(cell.date)} · No hours`"
-                                        @click="cell.row ? inspectRow(cell.row) : null"
+                                        @click="pickDay(cell)"
                                     >
                                         <span>{{ cell.day }}</span>
                                         <i v-if="cell.row?.status === 'open' || cell.row?.status === 'on_break'" class="live-dot pulsing" />
                                     </button>
                                 </template>
                             </div>
+
+                            <p v-if="pickedDay" class="heat-picked" role="status">
+                                {{ formatFullDay(pickedDay.date) }} · {{ pickedDay.minutes ? minutesLabel(pickedDay.minutes) : 'No hours' }}
+                            </p>
 
                             <div class="heat-legend">
                                 <span>Less</span>
