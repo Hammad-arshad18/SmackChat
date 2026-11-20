@@ -273,6 +273,7 @@ const model = computed(() => {
         modal
         :show-header="false"
         :draggable="false"
+        dismissable-mask
         :style="{ width: 'min(46rem, 94vw)' }"
         class="command-dialog"
         @hide="query = ''"
@@ -291,7 +292,10 @@ const model = computed(() => {
                     <i class="pi pi-search" />
                     <input v-bind="inputProps" class="cmd-input" placeholder="Search messages, people, or jump somewhere…">
                     <span v-if="searching" class="cmd-spinner"><i class="pi pi-spin pi-spinner" /></span>
-                    <kbd v-else>⌘K</kbd>
+                    <kbd v-else class="cmd-hotkey">⌘K</kbd>
+                    <button type="button" class="cmd-close" aria-label="Close search" @click="ui.commandOpen = false">
+                        <i class="pi pi-times" />
+                    </button>
                 </div>
             </template>
 

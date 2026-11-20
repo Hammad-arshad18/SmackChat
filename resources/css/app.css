@@ -2518,7 +2518,7 @@ kbd {
     box-shadow: none;
     border-radius: 0;
     padding: 7px;
-    max-height: min(58vh, 480px);
+    max-height: min(58dvh, 480px);
     overflow: auto;
     background: transparent;
 }
@@ -3524,7 +3524,7 @@ kbd {
     justify-items: center;
     gap: 8px;
     text-align: center;
-    padding: 12vh 20px 6vh;
+    padding: 12dvh 20px 6dvh;
     color: var(--muted);
 }
 
@@ -4554,7 +4554,7 @@ kbd {
     .composer-write-pop {
         width: calc(100vw - 16px) !important;
         max-width: 26rem;
-        max-height: min(72vh, 34rem);
+        max-height: min(72dvh, 34rem);
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         border-radius: 16px;
@@ -4746,7 +4746,7 @@ kbd {
 .search-results {
     display: grid;
     gap: 4px;
-    max-height: 48vh;
+    max-height: 48dvh;
     overflow: auto;
 }
 
@@ -7411,7 +7411,7 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 
 .media-preview-body {
     position: relative;
-    min-height: min(72vh, 720px);
+    min-height: min(72dvh, 720px);
     display: grid;
     place-items: center;
     background: var(--surface-2);
@@ -7423,7 +7423,7 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 .media-preview-video,
 .media-preview-pdf {
     max-width: 100%;
-    max-height: min(72vh, 720px);
+    max-height: min(72dvh, 720px);
     width: auto;
     height: auto;
     display: block;
@@ -7431,7 +7431,7 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 
 .media-preview-pdf {
     width: 100%;
-    min-height: min(72vh, 720px);
+    min-height: min(72dvh, 720px);
     border: 0;
     background: var(--surface);
 }
@@ -9725,4 +9725,324 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 .call-sound:hover {
     border-color: var(--primary);
     color: var(--primary);
+}
+
+/* --------------------------------------------------------------------------
+   Phones and touch screens
+   Kept together at the end so it wins over the desktop rules above without
+   !important. Covers safe areas, iOS input zoom, tap targets, the call dock,
+   toasts, and the command palette.
+   -------------------------------------------------------------------------- */
+
+.cmd-close {
+    display: none;
+    flex: none;
+    width: 40px;
+    height: 40px;
+    margin-right: -8px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    place-items: center;
+    cursor: pointer;
+}
+
+.cmd-close:hover {
+    background: var(--surface-3);
+    color: var(--ink);
+}
+
+/* Keep the chat's composer above a docked call on a phone. CallDock.vue sets
+   --call-dock-h to its own height while a call is open. */
+@media (max-width: 640px) {
+    body:has(.call-dock:not(.expanded):not(.stage)) .composer-dock {
+        padding-bottom: calc(var(--call-dock-h, 0px) + 16px + env(safe-area-inset-bottom));
+    }
+
+    .call-dock,
+    .call-dock.stage:not(.expanded) {
+        left: calc(8px + env(safe-area-inset-left));
+        right: calc(8px + env(safe-area-inset-right));
+        bottom: calc(8px + env(safe-area-inset-bottom));
+        width: auto;
+    }
+
+    .call-dock.stage:not(.expanded) {
+        height: auto;
+        max-height: min(70dvh, 560px);
+    }
+
+    .call-dock.stage:not(.expanded) .call-stage {
+        min-height: 180px;
+    }
+
+    .call-dock.expanded {
+        padding-top: env(safe-area-inset-top);
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+    }
+
+    /* Several people on a phone: one row of thumbnails that scrolls sideways
+       instead of rows that squeeze the pinned video to nothing. */
+    .call-dock.stage .call-stage.has-pin {
+        grid-template-columns: none;
+        grid-auto-flow: column;
+        grid-auto-columns: 112px;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+    }
+
+    .call-dock.stage .call-tile.film {
+        height: 84px;
+    }
+
+    .call-sound {
+        padding: 12px 20px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        box-shadow: var(--shadow-lift);
+    }
+
+    .call-controls .p-button {
+        min-width: 48px;
+        min-height: 48px;
+    }
+}
+
+@media (max-width: 860px) {
+    .cmd-close {
+        display: grid;
+    }
+
+    .cmd-hotkey {
+        display: none;
+    }
+}
+
+@media (max-width: 1080px) {
+    .composer-dock {
+        padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+
+    .topbar {
+        padding-top: calc(9px + env(safe-area-inset-top));
+        padding-left: calc(14px + env(safe-area-inset-left));
+        padding-right: calc(14px + env(safe-area-inset-right));
+    }
+
+    .nav-panel {
+        padding-top: calc(14px + env(safe-area-inset-top));
+        padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    }
+
+    .transcript {
+        padding-left: calc(12px + env(safe-area-inset-left));
+        padding-right: calc(12px + env(safe-area-inset-right));
+    }
+}
+
+@media (max-width: 700px) {
+    /* iOS zooms the page into any field under 16px and leaves it zoomed. */
+    .composer-input .ProseMirror,
+    .nav-filter input,
+    .cmd-input,
+    .p-inputtext,
+    .p-textarea,
+    .p-select-label,
+    textarea,
+    input[type='text'],
+    input[type='email'],
+    input[type='password'],
+    input[type='search'],
+    input[type='url'],
+    input[type='tel'],
+    input[type='number'] {
+        font-size: 16px;
+    }
+
+    .p-toast {
+        top: calc(10px + env(safe-area-inset-top)) !important;
+        right: 12px !important;
+        left: 12px !important;
+        width: auto !important;
+    }
+
+    .p-toast .p-toast-message {
+        margin-bottom: 8px;
+    }
+
+    .cmd-footer {
+        display: none;
+    }
+
+    /* One header row: the call buttons already turn green when a huddle is
+       live, so the tags can go and the tools stay beside the title. */
+    .chat-header {
+        flex-wrap: nowrap;
+    }
+
+    .chat-tools {
+        flex: 0 1 auto;
+        min-width: 0;
+    }
+
+    .chat-tools .huddle-tag,
+    .chat-tools .chat-ai-badge {
+        display: none;
+    }
+
+    .chat-copy p {
+        font-size: 0.7rem;
+    }
+
+    .card-head {
+        flex-wrap: wrap;
+    }
+
+    .scope-select {
+        min-width: 0;
+        flex: 1 1 10rem;
+    }
+
+    .heat-legend {
+        flex-wrap: wrap;
+        row-gap: 6px;
+    }
+
+    .invite-copy strong,
+    .profile-hero h2,
+    .profile-hero p,
+    .profile-hero small,
+    .latest-invite .p-message-text {
+        overflow-wrap: anywhere;
+        min-width: 0;
+    }
+
+    .profile-hero > * {
+        min-width: 0;
+    }
+
+    .profile-hero {
+        flex-wrap: wrap;
+    }
+
+    /* On a phone the sign-in form matters more than the pitch. */
+    .auth-features,
+    .invite-points {
+        display: none;
+    }
+
+    .auth-story,
+    .invite-story {
+        padding: calc(18px + env(safe-area-inset-top)) 18px 18px;
+        gap: 14px;
+    }
+
+    .auth-story-copy h1,
+    .invite-story-copy h1 {
+        font-size: 1.6rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .panel {
+        padding: 14px;
+    }
+
+    .plan-ribbon {
+        position: static;
+        display: inline-block;
+        margin-bottom: 8px;
+    }
+}
+
+/* Touch screens: fingers need ~40px targets, and hover-only controls must be
+   visible because there is no hover. */
+@media (pointer: coarse) {
+    .msg-tools .p-button,
+    .icon-btn,
+    .icon-btn.tiny,
+    .call-pin {
+        min-width: 40px;
+        min-height: 40px;
+    }
+
+    .reaction {
+        min-height: 32px;
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+
+    .clear-filter {
+        width: 32px;
+        height: 32px;
+    }
+
+    .emoji-grid button {
+        min-width: 40px;
+        min-height: 40px;
+    }
+
+    .composer-attach-chip button {
+        min-width: 36px;
+        min-height: 36px;
+    }
+
+    .month-label {
+        padding: 10px 12px;
+    }
+
+    .status-chip {
+        padding: 9px 12px;
+    }
+
+    .day-select .p-togglebutton {
+        min-height: 40px;
+    }
+}
+
+@media (hover: none) {
+    .pulse-row > i {
+        opacity: 1;
+    }
+
+    .heat-cell:hover {
+        transform: none;
+    }
+}
+
+.heat-picked {
+    margin: 10px 0 0;
+    font-size: 0.78rem;
+    color: var(--muted-strong);
+}
+
+/* Phone composer: one toolbar row that scrolls sideways, so the transcript
+   keeps its height when the keyboard is open. */
+@media (max-width: 700px) {
+    .composer-dock .composer-toolbar,
+    .thread-composer .composer-toolbar {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+
+    .composer-dock .composer-toolbar::-webkit-scrollbar,
+    .thread-composer .composer-toolbar::-webkit-scrollbar {
+        display: none;
+    }
+
+    .composer-dock .composer-toolbar > *,
+    .thread-composer .composer-toolbar > * {
+        flex-shrink: 0;
+    }
+}
+
+@media (pointer: coarse) {
+    .composer-toolbar .p-button {
+        width: 36px;
+        height: 36px;
+    }
 }
