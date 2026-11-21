@@ -10,7 +10,7 @@ Laravel runs the API and the Vue app. MySQL stores the workspace. Ably carries l
 - Public channels, private channels, and direct messages that only the two people can open
 - Threads, reactions, inline editing, and safe copy/delete actions on a message
 - A rich composer: bold, italic, underline, strike, lists, quote, code, links, emoji, @mentions, and per-conversation drafts
-- Message text is encrypted at rest with the application key (AES-256-CBC)
+- Messages you write are end-to-end encrypted in the browser before they are sent. Server posts, such as the welcome message and attendance checkout, stay readable by the server. Attachments are stored on the server and are not end to end
 - A Today dashboard with shift status, live timer, unread catch-up, team presence, weekly hours, and next office day
 - A ⌘K command palette to jump between conversations, people, actions, and full-text search results
 - Full-workspace message search (search respects channel membership and the history window)
@@ -24,23 +24,52 @@ Laravel runs the API and the Vue app. MySQL stores the workspace. Ably carries l
 - Plenty of PrimeVue components: CommandMenu, DataTable, Tabs, Drawer, Dialog, Popover, Menu, Knob, MeterGroup, Accordion, SelectButton, ToggleSwitch, DatePicker, Password, Toast, and more
 - History is kept for 90 days. The owner can turn on the forever archive at $7 per person each month
 
-## Run it
+## Requirements
 
-Start MySQL:
+Docker is enough to run the app. To work on it outside containers you also need PHP 8.2 or newer, Composer, and Node.js 22.
+
+## Run it with Docker
 
 ```bash
-docker compose up -d
+docker compose up -d --build
+```
+
+Open http://localhost:8001.
+
+The first start installs PHP dependencies, builds the frontend, migrates the database, and seeds Northwind Studio. That can take a few minutes. Follow it with:
+
+```bash
+docker compose logs -f app
+```
+
+Compose sets the app’s database settings itself. MySQL inside the stack is `mysql:3306`, user `smackchat`, password `secret`, database `smackchat`. The same server is published on the machine at `127.0.0.1:3307`, so it can sit beside a MySQL that already uses port 3306.
+
+An existing `.env` is left in place. The container does not use that file’s `DB_HOST` for the web server. If `.env` is missing, the container copies `.env.example` and generates `APP_KEY`.
+
+Stop the stack with `docker compose down`. Add `-v` only when you also want to delete the database volume.
+
+## Run it on the machine
+
+Start only the database, then run PHP and Vite yourself:
+
+```bash
+docker compose up -d mysql
 cp .env.example .env
 php artisan key:generate
-php artisan migrate --seed
+composer install
 npm install
+php artisan migrate --seed
 npm run dev
 php artisan serve
 ```
 
-Open http://localhost:8000.
+`.env.example` points at the published database on port 3307. `php artisan serve` listens on http://localhost:8000. If that port is already taken, serve on 8001 and set `APP_URL` and `SANCTUM_STATEFUL_DOMAINS` to match.
 
-Seeded company: **Northwind Studio**
+`composer run dev` starts the web server, queue worker, log tail, and Vite together.
+
+## Sign in
+
+Either way of running the app seeds **Northwind Studio**.
 
 | Person | Email | Password | Role |
 | --- | --- | --- | --- |
