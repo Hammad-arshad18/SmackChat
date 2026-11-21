@@ -234,14 +234,14 @@ const aiReady = computed(() => ai.engine !== 'unavailable');
 const aiBadgeLabel = computed(() => aiReadyBadge());
 const aiStatusLabel = computed(() => {
     if (ai.modelState === 'downloading') {
-        return ai.downloadLabel;
+        return '';
     }
 
     if (!aiBusy.value) {
         return '';
     }
 
-    return aiMode.value === 'write' ? 'Writing on-device…' : 'Polishing on-device…';
+    return aiMode.value === 'write' ? 'Filling in the draft' : 'Rewriting the draft';
 });
 
 const writeToneOptions = [
@@ -451,9 +451,16 @@ async function confirmDownload() {
     }
 
     downloadBusy.value = true;
+    const stop = toast.followPercent('ai-model', 'Downloading model', () => ai.downloadPercent);
 
     try {
         await prepareModel();
+        stop();
+        toast.finish('ai-model', {
+            summary: 'Offline AI ready',
+            detail: 'The model is cached on this device.',
+            life: 2800,
+        });
         downloadConfirm.value = false;
         const action = pendingAiAction.value;
         pendingAiAction.value = null;
@@ -462,7 +469,8 @@ async function confirmDownload() {
             await action();
         }
     } catch (error) {
-        toast.add({
+        stop();
+        toast.finish('ai-model', {
             severity: 'warn',
             summary: 'Offline AI',
             detail: errorText(error, 'Could not start the offline AI model on this device.'),
@@ -598,6 +606,7 @@ async function performRewrite(options) {
 
     aiMode.value = 'polish';
     const token = beginAiRun();
+    toast.loading('ai-draft', 'Polishing', 'On this device');
 
     try {
         const result = await rewriteDraftLocally(current, options, {
@@ -611,18 +620,21 @@ async function performRewrite(options) {
         });
 
         if (token !== aiRun) {
+            toast.dismiss('ai-draft');
             return;
         }
 
         applyAiText(result || current);
+        toast.finish('ai-draft', { summary: 'Polished', life: 1600 });
     } catch (error) {
         if (token !== aiRun) {
+            toast.dismiss('ai-draft');
             return;
         }
 
         restorePreviousDraft();
         previousDraftBeforeAi.value = null;
-        toast.add({
+        toast.finish('ai-draft', {
             severity: 'warn',
             summary: 'On-device AI',
             detail: errorText(error, 'Could not polish this draft locally.'),
@@ -657,6 +669,7 @@ async function performWrite() {
 
     aiMode.value = 'write';
     const token = beginAiRun();
+    toast.loading('ai-draft', 'Writing', 'On this device');
 
     try {
         const result = await writeDraftLocally(
@@ -674,20 +687,23 @@ async function performWrite() {
         );
 
         if (token !== aiRun) {
+            toast.dismiss('ai-draft');
             return;
         }
 
         applyAiText(result || brief);
         writeBrief.value = '';
         writePop.value?.hide?.();
+        toast.finish('ai-draft', { summary: 'Draft ready', life: 1600 });
     } catch (error) {
         if (token !== aiRun) {
+            toast.dismiss('ai-draft');
             return;
         }
 
         restorePreviousDraft();
         previousDraftBeforeAi.value = null;
-        toast.add({
+        toast.finish('ai-draft', {
             severity: 'warn',
             summary: 'On-device AI',
             detail: errorText(error, 'Could not write this draft locally.'),

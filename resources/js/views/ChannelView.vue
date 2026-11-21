@@ -203,9 +203,16 @@ async function confirmDownload() {
     }
 
     downloadBusy.value = true;
+    const stop = toast.followPercent('ai-model', 'Downloading model', () => ai.downloadPercent);
 
     try {
         await prepareModel();
+        stop();
+        toast.finish('ai-model', {
+            summary: 'Offline AI ready',
+            detail: 'The model is cached on this device.',
+            life: 2800,
+        });
         downloadConfirm.value = false;
         const action = pendingDownloadAction.value;
         pendingDownloadAction.value = null;
@@ -214,7 +221,8 @@ async function confirmDownload() {
             await action();
         }
     } catch (error) {
-        toast.add({
+        stop();
+        toast.finish('ai-model', {
             severity: 'warn',
             summary: 'Offline AI',
             detail: errorText(error, 'Could not start the offline AI model on this device.'),
@@ -577,6 +585,7 @@ async function summarizeChannel() {
     channelSummaryBusy.value = true;
     channelSummaryOpen.value = true;
     channelSummary.value = '';
+    toast.loading('ai-summary', 'Summarizing', 'On this device');
 
     try {
         const payload = messages.value
@@ -599,19 +608,23 @@ async function summarizeChannel() {
         );
 
         if (token !== channelSummaryRun) {
+            toast.dismiss('ai-summary');
             return;
         }
 
         channelSummary.value = result;
+        toast.finish('ai-summary', { summary: 'Summary ready', life: 1600 });
     } catch (error) {
         if (token === channelSummaryRun) {
             channelSummary.value = '';
-            toast.add({
+            toast.finish('ai-summary', {
                 severity: 'warn',
                 summary: 'On-device AI',
                 detail: errorText(error, 'Could not summarize this conversation locally.'),
                 life: 3500,
             });
+        } else {
+            toast.dismiss('ai-summary');
         }
     } finally {
         if (token === channelSummaryRun) {
@@ -645,6 +658,7 @@ async function summarizeThread({ force = false } = {}) {
     }
 
     const token = ++threadSummaryRun;
+    toast.loading('ai-summary', 'Summarizing thread', 'On this device');
     threadSummaryBusy.value = true;
     threadSummaryOpen.value = true;
     threadSummaryHidden.value = false;
@@ -666,10 +680,12 @@ async function summarizeThread({ force = false } = {}) {
         );
 
         if (token !== threadSummaryRun) {
+            toast.dismiss('ai-summary');
             return;
         }
 
         threadSummary.value = result;
+        toast.finish('ai-summary', { summary: 'Thread summarized', life: 1600 });
         if (result && fingerprint === threadFingerprint.value) {
             writeCachedThreadSummary(office.slug, thread.value.ref, result, fingerprint);
             threadSummaryFromCache.value = false;
@@ -678,12 +694,14 @@ async function summarizeThread({ force = false } = {}) {
     } catch (error) {
         if (token === threadSummaryRun) {
             threadSummary.value = '';
-            toast.add({
+            toast.finish('ai-summary', {
                 severity: 'warn',
                 summary: 'On-device AI',
                 detail: errorText(error, 'Could not summarize this thread locally.'),
                 life: 3500,
             });
+        } else {
+            toast.dismiss('ai-summary');
         }
     } finally {
         if (token === threadSummaryRun) {
@@ -1429,7 +1447,7 @@ onBeforeUnmount(() => {
                             {{ ai.downloadLabel }}
                         </p>
                         <p v-else-if="channelSummaryBusy && !channelSummary" class="ai-summary-progress">
-                            Summarizing on this device…
+                            The catch-up will land in this card.
                         </p>
                         <div
                             v-if="channelSummary && channelSummaryOpen"
@@ -1694,7 +1712,7 @@ onBeforeUnmount(() => {
                             {{ ai.downloadLabel }}
                         </p>
                         <p v-else-if="threadSummaryBusy && !threadSummary" class="ai-summary-progress">
-                            Summarizing on this device…
+                            The thread notes will land in this card.
                         </p>
                         <div
                             v-if="threadSummary && threadSummaryOpen"

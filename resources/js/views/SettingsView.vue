@@ -116,22 +116,41 @@ async function downloadAiModel() {
     }
 
     aiBusy.value = true;
+    const downloading = ai.modelState !== 'ready';
+    const stop = downloading
+        ? toast.followPercent('ai-model', 'Downloading model', () => ai.downloadPercent)
+        : null;
 
     try {
         await prepareModel();
-        toast.add({
-            severity: 'success',
-            summary: 'Offline AI ready',
-            detail: 'The model is cached on this device. Future sessions reuse it.',
-            life: 3200,
-        });
+        stop?.();
+        if (downloading) {
+            toast.finish('ai-model', {
+                summary: 'Offline AI ready',
+                detail: 'The model is cached on this device. Future sessions reuse it.',
+                life: 3200,
+            });
+        } else {
+            toast.add({
+                severity: 'success',
+                summary: 'Offline AI ready',
+                detail: 'The model is cached on this device. Future sessions reuse it.',
+                life: 3200,
+            });
+        }
     } catch (error) {
-        toast.add({
+        stop?.();
+        const failed = {
             severity: 'warn',
             summary: 'Offline AI',
             detail: errorText(error, 'Could not start the offline AI model on this device.'),
             life: 4600,
-        });
+        };
+        if (downloading) {
+            toast.finish('ai-model', failed);
+        } else {
+            toast.add(failed);
+        }
     } finally {
         aiBusy.value = false;
     }
@@ -160,17 +179,19 @@ function redownloadAiModel() {
         acceptProps: { label: 'Re-download', severity: 'primary' },
         accept: async () => {
             aiBusy.value = true;
+            const stop = toast.followPercent('ai-model', 'Downloading model', () => ai.downloadPercent);
 
             try {
                 await redownloadLocalModel();
-                toast.add({
-                    severity: 'success',
+                stop();
+                toast.finish('ai-model', {
                     summary: 'Offline AI ready',
                     detail: 'The fastest model for this browser is cached on this device.',
                     life: 3200,
                 });
             } catch (error) {
-                toast.add({
+                stop();
+                toast.finish('ai-model', {
                     severity: 'warn',
                     summary: 'Offline AI',
                     detail: errorText(error, 'Could not start the offline AI model on this device.'),
