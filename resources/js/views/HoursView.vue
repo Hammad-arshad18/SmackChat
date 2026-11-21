@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useConfirm } from 'primevue/useconfirm';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import api, { errorText } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';

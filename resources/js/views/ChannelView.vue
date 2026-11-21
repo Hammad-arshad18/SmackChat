@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import {
     ai,
     aiReadyBadge,
@@ -598,9 +598,11 @@ async function summarizeChannel() {
             },
         );
 
-        if (token === channelSummaryRun) {
-            channelSummary.value = result;
+        if (token !== channelSummaryRun) {
+            return;
         }
+
+        channelSummary.value = result;
     } catch (error) {
         if (token === channelSummaryRun) {
             channelSummary.value = '';
@@ -1064,7 +1066,7 @@ function remove(message) {
 async function copyMessage(message) {
     try {
         await navigator.clipboard.writeText(message.text || '');
-        toast.add({ severity: 'success', summary: 'Copied to clipboard', life: 1800 });
+        toast.add({ severity: 'success', summary: 'Copied', life: 1600 });
     } catch {
         toast.add({ severity: 'warn', summary: 'Could not copy', life: 2200 });
     }

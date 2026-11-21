@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import CallVideo from '@/components/CallVideo.vue';
 import { unlockAudio } from '@/lib/ringtone';
 import { useAuthStore } from '@/stores/auth';

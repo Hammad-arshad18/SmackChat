@@ -138,6 +138,25 @@ async function visibleWindow() {
     return windows.some((client) => client.visibilityState === 'visible');
 }
 
+async function appHasFocus() {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const live = new Set(windows.map((client) => client.id));
+
+    for (const id of viewing.keys()) {
+        if (!live.has(id)) {
+            viewing.delete(id);
+        }
+    }
+
+    return windows.some((client) => {
+        if (client.visibilityState !== 'visible') {
+            return false;
+        }
+
+        return client.focused || Boolean(viewing.get(client.id)?.focused);
+    });
+}
+
 async function show(title, options) {
     await self.registration.showNotification(title, options).catch(() => self.registration.showNotification(title, {
         body: options.body,
@@ -212,6 +231,13 @@ self.addEventListener('push', (event) => {
             if (await visibleWindow()) {
                 return;
             }
+        }
+
+        // The open tab already shows the island. A second system alert is the duplicate.
+        // iPhone drops the push subscription if a push never displays a notification.
+        const ios = /iPhone|iPad|iPod/i.test(self.navigator?.userAgent || '');
+        if (!ios && !payload.call_id && payload.type !== 'call-ended' && await appHasFocus()) {
+            return;
         }
 
         await show(title, notificationOptions(payload));

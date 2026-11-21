@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import api, { errorText } from '@/api';
 import { searchMessages } from '@/e2e';
 import { useAuthStore } from '@/stores/auth';
@@ -96,7 +96,8 @@ async function punch(action) {
             severity: 'success',
             summary: action === 'check_in' ? 'On the clock' : 'Shift filed',
             detail: action === 'check_in' ? 'Your day has started.' : `${result.day.work_label} landed in Timesheets.`,
-            life: 3000,
+            life: 3200,
+            confetti: action === 'check_in',
         });
     } catch (error) {
         toast.add({ severity: 'warn', summary: 'Attendance', detail: errorText(error), life: 3500 });

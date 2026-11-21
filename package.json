@@ -27,6 +27,7 @@
         "@tiptap/suggestion": "^3.34.0",
         "@tiptap/vue-3": "^3.34.0",
         "ably": "^2.30.0",
+        "dynaura": "^0.2.2",
         "pinia": "^4.1.0",
         "primeicons": "^8.0.2",
         "primevue": "^5.0.4",

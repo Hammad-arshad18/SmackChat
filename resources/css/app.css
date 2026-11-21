@@ -389,12 +389,29 @@ select:-webkit-autofill {
     color: var(--muted-strong);
 }
 
-.p-toast .p-toast-message {
-    border-radius: 16px;
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--text);
-    box-shadow: var(--shadow-lift);
+.dynaura-root {
+    --dynaura-font: var(--font-body);
+}
+
+.reduce-motion .dynaura-typing i {
+    animation: none;
+    opacity: 0.7;
+}
+
+.reduce-motion .dynaura-drag,
+.reduce-motion .dynaura-island,
+.reduce-motion .dynaura-badge,
+.reduce-motion .dynaura-title,
+.reduce-motion .dynaura-body,
+.reduce-motion .dynaura-draw,
+.reduce-motion .dynaura-strip,
+.reduce-motion .dynaura-button,
+.reduce-motion .dynaura-bar,
+.reduce-motion .dynaura-face {
+    animation-duration: 1ms !important;
+    animation-delay: 0s !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0s !important;
 }
 
 .p-skeleton {
@@ -9859,17 +9876,6 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     input[type='tel'],
     input[type='number'] {
         font-size: 16px;
-    }
-
-    .p-toast {
-        top: calc(10px + env(safe-area-inset-top)) !important;
-        right: 12px !important;
-        left: 12px !important;
-        width: auto !important;
-    }
-
-    .p-toast .p-toast-message {
-        margin-bottom: 8px;
     }
 
     .cmd-footer {

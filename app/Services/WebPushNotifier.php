@@ -7,6 +7,7 @@ use App\Models\Channel;
 use App\Models\Message;
 use App\Models\PushSubscription;
 use App\Models\User;
+use App\Support\OpaqueId;
 use GuzzleHttp\Client;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -58,8 +59,8 @@ class WebPushNotifier
         $body = trim($author->name.': '.($excerpt !== '' ? $excerpt : 'New message'));
         $url = '/w/'.$channel->workspace->slug.'/c/'.$channel->slug;
         $url .= $parentId
-            ? '?m='.$parentId.'&reply='.$message->id
-            : '?m='.$message->id;
+            ? '?m='.OpaqueId::encode($parentId).'&reply='.OpaqueId::encode($message->id)
+            : '?m='.OpaqueId::encode($message->id);
 
         $payload = json_encode([
             'title' => $title,

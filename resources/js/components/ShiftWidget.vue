@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import { errorText } from '@/api';
 import { useOfficeStore } from '@/stores/office';
 import { formatClock, isAttendanceOffDay, minutesLabel, shiftTotals, durationClock, wallClockLabel, workPortions } from '@/time';
@@ -112,7 +112,13 @@ async function punch(action) {
                 life: 4000,
             });
         } else if (action === 'check_in') {
-            toast.add({ severity: 'success', summary: 'You are on the clock', detail: 'The floor clock is running.', life: 3000 });
+            toast.add({
+                severity: 'success',
+                summary: 'You are on the clock',
+                detail: 'The floor clock is running.',
+                life: 3200,
+                confetti: true,
+            });
         }
     } catch (error) {
         toast.add({ severity: 'warn', summary: 'Attendance', detail: errorText(error), life: 4000 });

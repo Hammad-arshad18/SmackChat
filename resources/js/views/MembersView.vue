@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import api, { errorText } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
@@ -61,7 +61,17 @@ async function invite() {
         inviteForm.value = { email: '', role: 'member' };
         await office.refreshMembers();
         await copy(data.invitation.url, false);
-        toast.add({ severity: 'success', summary: 'Invite ready', detail: 'The link was copied. You can also copy it below.', life: 3600 });
+        const url = data.invitation.url;
+        toast.add({
+            severity: 'success',
+            summary: 'Invite ready',
+            detail: 'The link is on the clipboard.',
+            life: 4200,
+            button: {
+                title: 'Copy again',
+                onClick: () => navigator.clipboard.writeText(url).catch(() => {}),
+            },
+        });
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Invite', detail: errorText(error), life: 3500 });
     } finally {
@@ -104,7 +114,13 @@ async function updateRole(role) {
         await api.patch(`/workspaces/${office.slug}/members/${selectedPerson.value.id}`, { role });
         await office.refreshMembers();
         selectedPerson.value.role = role;
-        toast.add({ severity: 'success', summary: 'Role updated', life: 2200 });
+        toast.add({
+            severity: 'success',
+            summary: selectedPerson.value.name,
+            detail: `Now ${role}.`,
+            person: selectedPerson.value,
+            life: 2400,
+        });
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Role', detail: errorText(error), life: 3000 });
     } finally {
@@ -130,7 +146,13 @@ function removePerson(person) {
                     return;
                 }
                 await office.refreshMembers();
-                toast.add({ severity: 'success', summary: 'Person removed', life: 2200 });
+                toast.add({
+                    severity: 'info',
+                    summary: person.name,
+                    detail: 'Removed from the workspace.',
+                    person,
+                    life: 2400,
+                });
             } catch (error) {
                 toast.add({ severity: 'error', summary: 'Remove person', detail: errorText(error), life: 3200 });
             }
@@ -302,9 +324,6 @@ function revoke(invite) {
                     <Select v-model="inviteForm.role" :options="inviteRoles" option-label="label" option-value="value" fluid />
                 </div>
                 <p class="fine">Admins can manage people and channels. Members can chat and file their own hours.</p>
-                <Message v-if="latestInvite" severity="success" :closable="false">
-                    Latest link for {{ latestInvite.email }}: {{ latestInvite.url }}
-                </Message>
                 <div class="dialog-actions">
                     <Button label="Close" text severity="secondary" type="button" @click="inviteOpen = false" />
                     <Button type="submit" label="Create invite" icon="pi pi-send" :loading="busy" :disabled="!inviteForm.email" />

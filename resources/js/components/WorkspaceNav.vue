@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import { errorText } from '@/api';
 import BrandMark from '@/components/BrandMark.vue';
 import ShiftWidget from '@/components/ShiftWidget.vue';

@@ -6,7 +6,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
 import Mention from '@tiptap/extension-mention';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import {
     ai,
     aiReadyBadge,
@@ -815,7 +815,12 @@ async function uploadFile(file) {
     } catch (error) {
         attachments.value = attachments.value.filter((item) => item.localId !== localId);
         if (previewUrl) URL.revokeObjectURL(previewUrl);
-        toast.add({ severity: 'error', summary: 'Upload failed', detail: errorText(error, 'Could not upload that file.'), life: 3500 });
+        toast.add({
+            severity: 'error',
+            summary: 'Upload failed',
+            detail: errorText(error, 'Could not upload that file.'),
+            life: 3500,
+        });
     } finally {
         uploading.value = attachments.value.some((item) => item.uploading);
     }

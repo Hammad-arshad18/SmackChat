@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { useConfirm } from 'primevue/useconfirm';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import api, { errorText } from '@/api';
 import { useOfficeStore } from '@/stores/office';
 import { formatFullDay, money } from '@/time';
@@ -64,7 +64,7 @@ async function archive() {
     try {
         const { data } = await api.post(`/workspaces/${office.slug}/billing/archive`);
         await office.load(office.slug);
-        toast.add({ severity: 'success', summary: 'Forever archive is on', detail: data.message, life: 4500 });
+        toast.add({ severity: 'success', summary: 'Forever archive is on', detail: data.message, life: 4500, confetti: true });
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Billing', detail: errorText(error), life: 3500 });
     } finally {

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConfirm } from 'primevue/useconfirm';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import {
     ai,
     aiEngineLabel,
@@ -296,7 +296,13 @@ async function uploadAvatar(event) {
     try {
         await auth.updateAvatar(file);
         await office.refreshMembers();
-        toast.add({ severity: 'success', summary: 'Photo updated', detail: 'Your profile picture is saved.', life: 2500 });
+        toast.add({
+            severity: 'success',
+            summary: 'Photo updated',
+            detail: 'Your profile picture is saved.',
+            person: auth.user,
+            life: 2800,
+        });
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Profile photo', detail: errorText(error), life: 3500 });
     } finally {
@@ -328,7 +334,13 @@ async function uploadLogo(event) {
     try {
         await office.updateLogo(file);
         await auth.fetchMe();
-        toast.add({ severity: 'success', summary: 'Logo updated', detail: 'Company logo has been saved.', life: 2500 });
+        toast.add({
+            severity: 'success',
+            summary: 'Logo updated',
+            detail: 'Company logo has been saved.',
+            person: { name: office.workspace?.name, avatar_url: office.workspace?.logo_url },
+            life: 2800,
+        });
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Company logo', detail: errorText(error), life: 3500 });
     } finally {

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useToast } from 'primevue/usetoast';
+import { useToast } from '@/toast';
 import api, { errorText } from '@/api';
 import BrandMark from '@/components/BrandMark.vue';
 import CommandPalette from '@/components/CommandPalette.vue';
@@ -16,7 +16,7 @@ import {
     refreshPermissionState,
     requestAppPermissions,
 } from '@/permissions';
-import { ensurePush, isViewingMessage, needsHomeScreen, pushActive, pushError, showAlert } from '@/push';
+import { ensurePush, isViewingMessage, pushActive, pushError, showAlert } from '@/push';
 import { timeAgo } from '@/time';
 
 const route = useRoute();
@@ -167,13 +167,42 @@ function onOfficeMessage(event) {
     }
 
     const viewing = isViewingMessage(message.channel_id, message.parent_id);
-    const phone = needsHomeScreen() || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const focused = document.visibilityState === 'visible' && document.hasFocus();
 
     if (ui.preferences.messageSounds && !viewing) {
         chime();
     }
 
-    if (viewing && !phone) {
+    if (focused) {
+        if (viewing) {
+            return;
+        }
+
+        const channel = office.channels.find((item) => item.id === message.channel_id);
+        const label = channel?.label || office.workspace?.name || 'SmackChat';
+        const thread = message.parent_ref
+            ? `?m=${encodeURIComponent(message.parent_ref)}&reply=${encodeURIComponent(message.ref)}`
+            : (message.ref ? `?m=${encodeURIComponent(message.ref)}` : '');
+        const url = channel ? `/w/${office.slug}/c/${channel.slug}${thread}` : '/app';
+        const raw = (typeof message.excerpt === 'string' ? message.excerpt : '')
+            || (typeof message.text === 'string' ? message.text : '');
+        const line = raw.replace(/\s+/g, ' ').trim();
+        const preview = line.length > 160 ? `${line.slice(0, 157)}…` : line;
+        const id = `ch-${message.channel_id}`;
+
+        toast.person({
+            id,
+            person: message.user,
+            title: message.user?.name || 'New message',
+            description: message.parent_id
+                ? `Thread in ${label} · ${preview || 'New message'}`
+                : (preview || `New message in ${label}`),
+            onClick: () => {
+                router.push(url);
+                toast.dismiss(id);
+            },
+        });
+
         return;
     }
 
@@ -236,12 +265,18 @@ function onGlobalKey(event) {
 async function createChannel() {
     busy.value = true;
     try {
+        const name = channelForm.value.name.trim();
         const { data } = await api.post(`/workspaces/${office.slug}/channels`, channelForm.value);
         channelOpen.value = false;
         channelForm.value = { name: '', description: '', private: false, member_ids: [] };
         await office.refreshChannels();
         router.push(`/w/${office.slug}/c/${data.slug}`);
-        toast.add({ severity: 'success', summary: 'Channel ready', life: 2200 });
+        toast.add({
+            severity: 'success',
+            summary: name ? `#${name}` : 'Channel ready',
+            detail: 'The channel is open.',
+            life: 2200,
+        });
     } catch (error) {
         toast.add({ severity: 'error', summary: 'Channel', detail: errorText(error), life: 3500 });
     } finally {
@@ -352,38 +387,39 @@ async function allowPermissions() {
 
         if (result.notification.ok) {
             ui.setPreference('desktopNotifications', true);
-            const { data } = await api.post('/push/test').catch(() => ({ data: { sent: 0, subscriptions: 0 } }));
-            if (data?.sent) {
-                toast.add({
-                    severity: 'success',
-                    summary: 'Alerts are on',
-                    detail: 'You should see “Alerts are on for this phone.”',
-                    life: 4000,
-                });
-            }
-        } else if (result.notification.message) {
-            toast.add({
-                severity: 'warn',
-                summary: 'Alerts',
-                detail: result.notification.message,
-                life: 5000,
-            });
+            api.post('/push/test').catch(() => {});
         }
 
-        if (!result.location.ok && result.location.message) {
-            toast.add({
-                severity: 'warn',
-                summary: 'Location',
-                detail: result.location.message,
-                life: 5000,
-            });
-        }
+        const locationNote = !result.location.ok && result.location.message ? result.location.message : '';
 
         if (result.location.ok && result.notification.ok) {
             permissionsOpen.value = false;
             toast.add({ severity: 'success', summary: 'Access ready', detail: 'Location and alerts are enabled.', life: 2800 });
-        } else if (result.location.ok || result.notification.ok) {
+        } else if (result.notification.ok) {
             permissionsOpen.value = needsPermissionPrompt();
+            toast.add({
+                severity: locationNote ? 'warn' : 'success',
+                summary: 'Alerts are on',
+                detail: locationNote || 'You should see “Alerts are on for this phone.”',
+                life: 4000,
+            });
+        } else if (result.location.ok) {
+            permissionsOpen.value = needsPermissionPrompt();
+            if (result.notification.message) {
+                toast.add({
+                    severity: 'warn',
+                    summary: 'Alerts',
+                    detail: result.notification.message,
+                    life: 5000,
+                });
+            }
+        } else if (result.notification.message || locationNote) {
+            toast.add({
+                severity: 'warn',
+                summary: result.notification.message ? 'Alerts' : 'Location',
+                detail: result.notification.message || locationNote,
+                life: 5000,
+            });
         }
     } finally {
         permissionsBusy.value = false;

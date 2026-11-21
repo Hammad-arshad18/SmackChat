@@ -1,8 +1,8 @@
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import PrimeVue from 'primevue/config';
-import ToastService from 'primevue/toastservice';
 import ConfirmationService from 'primevue/confirmationservice';
+import 'dynaura/styles-no-font.css';
 import Tooltip from 'primevue/tooltip';
 
 import Accordion from 'primevue/accordion';
@@ -50,7 +50,6 @@ import TabPanels from 'primevue/tabpanels';
 import Tabs from 'primevue/tabs';
 import Tag from 'primevue/tag';
 import Textarea from 'primevue/textarea';
-import Toast from 'primevue/toast';
 import ToggleButton from 'primevue/togglebutton';
 import ToggleSwitch from 'primevue/toggleswitch';
 import Toolbar from 'primevue/toolbar';
@@ -79,7 +78,6 @@ app.use(PrimeVue, {
         },
     },
 });
-app.use(ToastService);
 app.use(ConfirmationService);
 
 const components = {
@@ -129,7 +127,6 @@ const components = {
     Tabs,
     Tag,
     Textarea,
-    Toast,
     ToggleButton,
     ToggleSwitch,
     Toolbar,
