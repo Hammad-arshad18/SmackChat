@@ -11,6 +11,7 @@ import {
     formatDay,
     formatFullDay,
     formatMonth,
+    averageWorkdayMinutes,
     isoDate,
     isoDateInZone,
     minutesLabel,
@@ -66,13 +67,12 @@ const scopeOptions = computed(() => [
 ]);
 const scopeName = computed(() => scopeOptions.value.find((person) => person.id === scope.value)?.name || 'You');
 const scopeRows = computed(() => (scope.value === 0 ? rows.value : rows.value.filter((row) => row.user_id === scope.value)));
-const completedRows = computed(() => scopeRows.value.filter((row) => row.status === 'completed'));
 const minutesOf = (row) => row.counted_minutes ?? row.work_minutes ?? 0;
 const totalMinutes = computed(() => scopeRows.value.reduce((total, row) => total + minutesOf(row), 0));
 const overtimeMinutes = computed(() => scopeRows.value.reduce((total, row) => total + (row.overtime_minutes || 0), 0));
 const breakMinutes = computed(() => scopeRows.value.reduce((total, row) => total + (row.break_minutes || 0), 0));
 const daysWorked = computed(() => new Set(scopeRows.value.filter((row) => row.work_minutes > 0 || row.status !== 'idle').map((row) => row.work_date)).size);
-const avgMinutes = computed(() => (completedRows.value.length ? Math.round(completedRows.value.reduce((total, row) => total + row.work_minutes, 0) / completedRows.value.length) : 0));
+const avgMinutes = computed(() => averageWorkdayMinutes(scopeRows.value));
 const floorToday = computed(() => isoDateInZone(office.workspace?.timezone));
 const openToday = computed(() => {
     const today = floorToday.value;

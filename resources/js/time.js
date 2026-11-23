@@ -102,6 +102,28 @@ export function isAttendanceOffDay(day) {
     return Boolean(day?.non_working_day || day?.holiday_name);
 }
 
+/**
+ * Mean length of a finished scheduled workday.
+ * Weekends, holidays, and a shift that is still open stay out of the divisor.
+ */
+export function averageWorkdayMinutes(rows) {
+    const days = (rows || []).filter((row) => {
+        if (row?.status !== 'completed' || isAttendanceOffDay(row)) {
+            return false;
+        }
+
+        return (row.counted_minutes ?? row.work_minutes ?? 0) > 0;
+    });
+
+    if (!days.length) {
+        return 0;
+    }
+
+    const total = days.reduce((sum, row) => sum + (row.counted_minutes ?? row.work_minutes ?? 0), 0);
+
+    return Math.round(total / days.length);
+}
+
 /** Match AttendanceCalculator::portions — off-day shifts are all overtime. */
 export function workPortions(workMinutes, standardMinutes = 480, offDay = false) {
     const worked = Math.max(0, workMinutes || 0);
