@@ -7,6 +7,7 @@ import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
 import Mention from '@tiptap/extension-mention';
 import { useToast } from '@/toast';
+import { takeAgentFollowup } from '@/agent';
 import {
     ai,
     aiReadyBadge,
@@ -14,8 +15,8 @@ import {
     isDownloadRequired,
     prepareModel,
     rewriteDraftLocally,
-    writeDraftLocally,
 } from '@/ai';
+import AgentAsk from '@/components/AgentAsk.vue';
 import api, { errorText } from '@/api';
 import { warmAttachmentCache } from '@/lib/attachments';
 import { useOfficeStore } from '@/stores/office';
@@ -30,6 +31,7 @@ const props = defineProps({
     compact: { type: Boolean, default: false },
     channel: { type: String, default: '' },
     allowAttachments: { type: Boolean, default: true },
+    contextMessages: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(['send', 'typing']);
@@ -47,6 +49,9 @@ const linkPop = ref(null);
 const aiPop = ref(null);
 const writePop = ref(null);
 const writeBtn = ref(null);
+const agentAsk = ref(null);
+const agentPhase = ref('');
+const followupSteps = ref([]);
 const linkUrl = ref('');
 const mentionOpen = ref(false);
 const mentionItems = ref([]);
@@ -59,9 +64,6 @@ const dragOver = ref(false);
 const aiBusy = ref(false);
 const aiMode = ref('');
 const previousDraftBeforeAi = ref(null);
-const writeBrief = ref('');
-const writeTone = ref('neutral');
-const writeBriefInput = ref(null);
 const downloadConfirm = ref(false);
 const downloadBusy = ref(false);
 const pendingAiAction = ref(null);
@@ -224,12 +226,33 @@ onMounted(async () => {
     } catch {
         /* the AI toolbar simply stays hidden */
     }
+
+    const steps = takeAgentFollowup(props.channel);
+
+    if (!steps.length) {
+        return;
+    }
+
+    if (steps.some((step) => step.action === 'reply' || step.action === 'summarize')) {
+        const start = Date.now();
+
+        while (!props.contextMessages.length && Date.now() - start < 5000) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+    }
+
+    followupSteps.value = steps;
+    await nextTick();
+    const target = writeBtn.value?.$el || writeBtn.value;
+
+    if (target) {
+        writePop.value?.show?.({ currentTarget: target }, target);
+    }
 });
 
 const canAttach = computed(() => props.allowAttachments && !!props.channel && !props.initial);
 const isEmpty = computed(() => charCount.value === 0 && !attachments.value.length);
 const canSend = computed(() => !isEmpty.value && !uploading.value && !aiBusy.value && charCount.value <= 8000);
-const canGenerateWrite = computed(() => writeBrief.value.trim().length >= 3 && !aiBusy.value);
 const aiReady = computed(() => ai.engine !== 'unavailable');
 const aiBadgeLabel = computed(() => aiReadyBadge());
 const aiStatusLabel = computed(() => {
@@ -241,14 +264,12 @@ const aiStatusLabel = computed(() => {
         return '';
     }
 
-    return aiMode.value === 'write' ? 'Filling in the draft' : 'Rewriting the draft';
-});
+    if (agentPhase.value) {
+        return agentPhase.value;
+    }
 
-const writeToneOptions = [
-    { label: 'Neutral', value: 'neutral' },
-    { label: 'Professional', value: 'formal' },
-    { label: 'Casual', value: 'casual' },
-];
+    return 'Rewriting the draft';
+});
 
 const aiActions = computed(() => {
     const items = [];
@@ -281,8 +302,8 @@ const aiActions = computed(() => {
         },
         { separator: true },
         {
-            label: 'Ask AI to Write…',
-            icon: 'pi pi-pen-to-square',
+            label: 'Ask AI…',
+            icon: 'pi pi-sparkles',
             command: () => openWritePop(),
         },
     );
@@ -363,7 +384,7 @@ function toggleAi(event) {
         toast.add({
             severity: 'info',
             summary: 'AI Polish',
-            detail: 'Write a draft first, or use Ask AI to Write to generate one from notes.',
+            detail: 'Write a draft first, or use Ask AI to draft one from notes.',
             life: 3200,
         });
         return;
@@ -397,8 +418,7 @@ async function openWritePop(event) {
     }
 
     await nextTick();
-    const field = writeBriefInput.value?.$el || writeBriefInput.value;
-    field?.focus?.();
+    agentAsk.value?.focus?.();
 }
 
 /**
@@ -648,73 +668,35 @@ async function performRewrite(options) {
     }
 }
 
-async function runAiWrite() {
-    const brief = writeBrief.value.trim();
-    if (!aiReady.value || brief.length < 3 || aiBusy.value) {
-        return;
-    }
-
-    if (!(await ensureAiReady(() => performWrite()))) {
-        return;
-    }
-
-    await performWrite();
+function composerDraft() {
+    return editor.value?.getText() || '';
 }
 
-async function performWrite() {
-    const brief = writeBrief.value.trim();
-    if (brief.length < 3 || aiBusy.value) {
-        return;
+function onAgentDraft(text) {
+    if (!previousDraftBeforeAi.value) {
+        previousDraftBeforeAi.value = JSON.stringify(editor.value?.getJSON() || { type: 'doc', content: [{ type: 'paragraph' }] });
     }
 
-    aiMode.value = 'write';
-    const token = beginAiRun();
-    toast.loading('ai-draft', 'Writing', 'On this device');
+    applyAiText(text);
+}
 
-    try {
-        const result = await writeDraftLocally(
-            brief,
-            { tone: writeTone.value, length: 'short' },
-            {
-                onChunk: (chunk) => {
-                    if (token !== aiRun) {
-                        return;
-                    }
+function onAgentRevert() {
+    restorePreviousDraft();
+    previousDraftBeforeAi.value = null;
+}
 
-                    applyAiText(chunk);
-                },
-            },
-        );
+function onAgentClose() {
+    writePop.value?.hide?.();
+}
 
-        if (token !== aiRun) {
-            toast.dismiss('ai-draft');
-            return;
-        }
+function onAgentDeliver() {
+    aiBusy.value = false;
+    agentPhase.value = '';
+    submit();
+}
 
-        applyAiText(result || brief);
-        writeBrief.value = '';
-        writePop.value?.hide?.();
-        toast.finish('ai-draft', { summary: 'Draft ready', life: 1600 });
-    } catch (error) {
-        if (token !== aiRun) {
-            toast.dismiss('ai-draft');
-            return;
-        }
-
-        restorePreviousDraft();
-        previousDraftBeforeAi.value = null;
-        toast.finish('ai-draft', {
-            severity: 'warn',
-            summary: 'On-device AI',
-            detail: errorText(error, 'Could not write this draft locally.'),
-            life: 3500,
-        });
-    } finally {
-        if (token === aiRun) {
-            aiBusy.value = false;
-            aiMode.value = '';
-        }
-    }
+function onAgentStarted() {
+    followupSteps.value = [];
 }
 
 function undoAi() {
@@ -743,7 +725,7 @@ function clear() {
     previousDraftBeforeAi.value = null;
     aiBusy.value = false;
     aiMode.value = '';
-    writeBrief.value = '';
+    agentPhase.value = '';
     writePop.value?.hide?.();
     aiRun += 1;
     attachments.value.forEach((item) => {
@@ -963,45 +945,20 @@ onBeforeUnmount(() => {
         </div>
 
         <Popover ref="writePop" class="composer-write-pop" :pt="{ root: { class: 'composer-write-pop' } }">
-            <form class="composer-write-form" @submit.prevent="runAiWrite">
-                <p class="form-label">Write with on-device AI</p>
-                <p class="composer-write-copy">Describe what you need — stays on this device.</p>
-                <Textarea
-                    ref="writeBriefInput"
-                    v-model="writeBrief"
-                    rows="4"
-                    auto-resize
-                    fluid
-                    maxlength="1000"
-                    placeholder="e.g. Ask the team if Friday’s demo can move to 3pm, keep it casual"
-                    :disabled="aiBusy"
-                    class="composer-write-input"
-                />
-                <div class="composer-write-tones">
-                    <button
-                        v-for="option in writeToneOptions"
-                        :key="option.value"
-                        type="button"
-                        class="composer-write-tone"
-                        :class="{ active: writeTone === option.value }"
-                        :disabled="aiBusy"
-                        @click="writeTone = option.value"
-                    >
-                        {{ option.label }}
-                    </button>
-                </div>
-                <div class="link-actions">
-                    <Button label="Cancel" text severity="secondary" size="small" type="button" :disabled="aiBusy" @click="writePop?.hide?.()" />
-                    <Button
-                        label="Write message"
-                        icon="pi pi-sparkles"
-                        size="small"
-                        type="submit"
-                        :disabled="!canGenerateWrite"
-                        :loading="aiBusy && aiMode === 'write'"
-                    />
-                </div>
-            </form>
+            <AgentAsk
+                ref="agentAsk"
+                v-model:busy="aiBusy"
+                v-model:phase="agentPhase"
+                :messages="contextMessages"
+                :channel-slug="channel"
+                :get-draft="composerDraft"
+                :set-draft="onAgentDraft"
+                :initial-steps="followupSteps"
+                @revert="onAgentRevert"
+                @deliver="onAgentDeliver"
+                @started="onAgentStarted"
+                @close="onAgentClose"
+            />
         </Popover>
 
         <div class="composer-shell">
@@ -1113,11 +1070,11 @@ onBeforeUnmount(() => {
                     rounded
                     size="small"
                     class="composer-ai-btn"
-                    :severity="aiBusy && aiMode === 'write' ? 'secondary' : undefined"
-                    :loading="aiBusy && aiMode === 'write'"
+                    :severity="aiBusy && agentPhase ? 'secondary' : undefined"
+                    :loading="aiBusy && !!agentPhase"
                     :disabled="aiBusy"
-                    aria-label="Ask AI to write"
-                    v-tooltip.top="aiBadgeLabel || 'Ask AI to Write · on-device'"
+                    aria-label="Ask AI"
+                    v-tooltip.top="aiBadgeLabel || 'Ask AI · on-device'"
                     @click="openWritePop"
                 />
                 <Button
@@ -1181,8 +1138,8 @@ onBeforeUnmount(() => {
             <div class="ai-download-dialog">
                 <p>
                     Download Offline AI ({{ ai.modelSizeHint }})? Downloads once to this device so you can
-                    rewrite, draft, and summarize E2E messages privately offline. If the full model cannot
-                    run here, a smaller one is used automatically.
+                    rewrite, draft, summarize, and run agent actions on E2E messages privately offline.
+                    If the full model cannot run here, a smaller one is used automatically.
                 </p>
                 <div v-if="ai.modelState === 'downloading'" class="ai-download-row">
                     <div class="ai-download-copy">

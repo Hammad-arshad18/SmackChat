@@ -116,6 +116,12 @@ async function markAllRead() {
 const actionItems = computed(() => {
     const items = [
         {
+            label: 'Ask on-device AI',
+            icon: 'pi pi-sparkles',
+            keywords: ['agent', 'ai', 'summarize', 'draft', 'search'],
+            command: run(() => emit('ask')),
+        },
+        {
             label: ui.isDark ? 'Switch to light theme' : 'Switch to dark theme',
             icon: ui.isDark ? 'pi pi-sun' : 'pi pi-moon',
             keywords: ['appearance', 'theme', 'color', 'dark', 'light'],

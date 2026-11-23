@@ -625,9 +625,10 @@ async function deleteAccount() {
                 </div>
 
                 <p class="fine">
-                    Rewrites, drafts, and summaries run inside this browser tab. Message text is end-to-end
-                    encrypted and is never sent to the server for AI. Re-downloading picks the fastest model
-                    this browser can run.
+                    Rewrites, drafts, summaries, and agent actions run inside this browser tab. Message text is
+                    end-to-end encrypted and is never sent to the server for the model to read. A drafted
+                    message is posted, and a clock change runs immediately. Re-downloading picks the fastest
+                    model this browser can run.
                 </p>
 
                 <div class="ai-actions">

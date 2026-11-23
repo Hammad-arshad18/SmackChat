@@ -131,6 +131,17 @@ const threadAiMessages = computed(() => {
             text: messagePlainForAi(item),
         }));
 });
+const channelAiMessages = computed(() => messages.value
+    .filter((item) => messagePlainForAi(item))
+    .slice(-30)
+    .map((item) => ({
+        name: item.user?.name || (item.system_type ? 'System' : 'Someone'),
+        text: messagePlainForAi(item),
+    })));
+const threadContextMessages = computed(() => threadAiMessages.value.slice(-30).map((item) => ({
+    name: item.user?.name || (item.system_type ? 'System' : 'Someone'),
+    text: item.text,
+})));
 const threadFingerprint = computed(() => threadSummaryFingerprint(threadAiMessages.value));
 const showThreadSummaryCard = computed(() => (
     !threadSummaryHidden.value && (threadSummaryBusy.value || !!threadSummary.value)
@@ -1635,6 +1646,7 @@ onBeforeUnmount(() => {
                     :allow-attachments="!editing"
                     :submit-label="composerSubmit"
                     :draft-key="editing ? '' : `channel-${office.slug}-${props.channel}`"
+                    :context-messages="channelAiMessages"
                     @send="send"
                     @typing="current && publishTyping(office.workspace.id, current.id, { user_id: auth.user.id, name: auth.user.name })"
                 />
@@ -1845,6 +1857,7 @@ onBeforeUnmount(() => {
                         :members="mentionPeople"
                         :channel="props.channel"
                         :draft-key="`reply-${office.slug}-${thread.id}`"
+                        :context-messages="threadContextMessages"
                         @send="sendReply"
                         @typing="current && publishTyping(office.workspace.id, current.id, { user_id: auth.user.id, name: auth.user.name })"
                     />

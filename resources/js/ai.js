@@ -12,6 +12,7 @@
  */
 
 import { reactive } from 'vue';
+import { agentPlanInstruction } from '@/agent';
 
 const NANO_FAILED_KEY = 'smack.ai.nanoFailed';
 const LOCAL_ENABLED_KEY = 'smack.ai.localFallbackEnabled';
@@ -1160,7 +1161,7 @@ function localInputCap() {
 
 function localMaxTokens(kind = 'write') {
     const ceiling = ai.isIos ? 150 : 200;
-    const wanted = kind === 'write' ? 180 : kind === 'summarize' ? 160 : 140;
+    const wanted = kind === 'act' ? 160 : kind === 'write' ? 180 : kind === 'summarize' ? 160 : 140;
 
     return Math.min(wanted, ceiling);
 }
@@ -1322,6 +1323,10 @@ async function runPromptSession(systemPrompt, user, hooks) {
 }
 
 async function runNano(kind, instruction, options, hooks) {
+    if (kind === 'act') {
+        return runPromptSession(instruction.system, instruction.user, hooks);
+    }
+
     if (kind === 'rewrite') {
         const rewriter = apiSurface('Rewriter');
 
@@ -1647,6 +1652,28 @@ export async function rewriteDraftLocally(
         instruction: rewriteInstruction(protectedDraft.text, { tone, length, action }),
         tokens: protectedDraft.tokens,
         hooks: { onChunk, onDownloadProgress },
+    });
+}
+
+/**
+ * Ask the on-device model to choose one agent action. Returns the raw text;
+ * `decideAgentPlan` parses it. The request and the channel catalog stay on device.
+ */
+export async function planAgentActionLocally(request, context, { onDownloadProgress } = {}) {
+    const source = String(request || '').trim();
+
+    if (!source) {
+        return '';
+    }
+
+    await initAiCapabilities();
+
+    return executeTask({
+        kind: 'act',
+        options: {},
+        instruction: agentPlanInstruction(source, context),
+        tokens: [],
+        hooks: { onDownloadProgress },
     });
 }
 

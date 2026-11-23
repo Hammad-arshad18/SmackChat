@@ -4414,7 +4414,7 @@ kbd {
 }
 
 .composer-write-form {
-    width: min(92vw, 22rem);
+    width: min(92vw, 26rem);
     display: grid;
     gap: 8px;
     padding: 3px;
@@ -4458,6 +4458,57 @@ kbd {
 .composer-write-tone:disabled {
     opacity: 0.55;
     cursor: default;
+}
+
+.agent-outcome {
+    display: grid;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+}
+
+.agent-outcome p {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+}
+
+.agent-outcome-note {
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.agent-outcome-list {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-height: 14rem;
+    overflow: auto;
+}
+
+.agent-outcome-list button {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: inherit;
+    border-radius: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    display: grid;
+    gap: 1px;
+}
+
+.agent-outcome-list strong {
+    font-size: 0.8rem;
+}
+
+.agent-outcome-list small {
+    color: var(--muted);
+    font-size: 0.68rem;
 }
 
 /* On-device AI: writer popover, one-time download, ready badge */
