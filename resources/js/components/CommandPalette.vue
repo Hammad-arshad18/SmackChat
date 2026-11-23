@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from '@/toast';
 import api, { errorText } from '@/api';
@@ -17,6 +17,7 @@ const ui = useUiStore();
 const query = ref('');
 const results = ref([]);
 const searching = ref(false);
+const searchField = ref(null);
 let searchTimer;
 let searchToken = 0;
 
@@ -24,8 +25,38 @@ watch(() => ui.commandOpen, (open) => {
     if (open) {
         query.value = '';
         results.value = [];
+        focusSearch();
     }
 });
+
+function focusSearch() {
+    nextTick(() => {
+        const field = searchField.value;
+
+        if (field) {
+            field.focus();
+            return;
+        }
+
+        requestAnimationFrame(() => searchField.value?.focus());
+    });
+}
+
+// PrimeVue's menu treats Space as Enter. The search field must keep the character.
+function searchInputProps(inputProps) {
+    const { onKeydown, ...rest } = inputProps;
+
+    return {
+        ...rest,
+        onKeydown(event) {
+            if (event.code === 'Space' || event.key === ' ') {
+                return;
+            }
+
+            onKeydown?.(event);
+        },
+    };
+}
 
 watch(query, (value) => {
     clearTimeout(searchTimer);
@@ -283,6 +314,7 @@ const model = computed(() => {
         dismissable-mask
         :style="{ width: 'min(46rem, 94vw)' }"
         class="command-dialog"
+        @show="focusSearch"
         @hide="query = ''"
     >
         <CommandMenu
@@ -297,7 +329,13 @@ const model = computed(() => {
             <template #header="{ inputProps }">
                 <div class="cmd-search">
                     <i class="pi pi-search" />
-                    <input v-bind="inputProps" class="cmd-input" placeholder="Search messages, people, or jump somewhere…">
+                    <input
+                        ref="searchField"
+                        v-bind="searchInputProps(inputProps)"
+                        class="cmd-input"
+                        autofocus
+                        placeholder="Search messages, people, or jump somewhere…"
+                    >
                     <span v-if="searching" class="cmd-spinner"><i class="pi pi-spin pi-spinner" /></span>
                     <kbd v-else class="cmd-hotkey">⌘K</kbd>
                     <button type="button" class="cmd-close" aria-label="Close search" @click="ui.commandOpen = false">
