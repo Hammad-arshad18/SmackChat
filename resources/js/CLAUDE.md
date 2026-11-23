@@ -39,7 +39,7 @@ Vue 3 SPA with Pinia, PrimeVue, and a TipTap composer. Laravel serves one Blade 
 
 ## On-device AI
 
-`ai.js` runs rewrite, draft, and summarize on the device: Chrome's built-in model first, then the Transformers.js worker in `workers/ai.worker.js`. No AI text goes to the API. Keep it that way.
+`ai.js` runs rewrite, draft, and summarize on the device: Chrome's built-in model first, then the Transformers.js worker in `workers/ai.worker.js`. `agent.js` turns an Ask AI request into up to three of those tasks, or into search, open, unread, or a clock punch. A draft or reply is sent, and a punch runs immediately. No AI text goes to the API. Keep it that way.
 
 ## Service worker
 

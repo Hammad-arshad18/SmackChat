@@ -19,7 +19,7 @@ Do not scan `vendor/` or `node_modules/`. Start in the file map below.
 - Huddles: WebRTC audio/video from the channel header. The server is only the switchboard. Free `standard` is one-to-one; `archive` adds groups up to `SMACKCHAT_CALL_GROUP_LIMIT` (8). In a DM the UI says "call"; in a channel it says "huddle". The callee gets a full-screen ring with a Web Audio ringtone, a title flash, and a browser notification when permitted. The call stage has a full-screen toggle and a 45-second ring / 60-second no-answer timeout.
 - Realtime key: the owner can put the workspace's own Ably key in Settings. It is encrypted at rest, never shown again, and minted into short-lived tokens. Without a workspace or server key the app polls.
 - Push (VAPID) and a PWA (`public/manifest.webmanifest`, `public/sw.js`). Theme: light, dark, system.
-- On-device AI (`ai.js`): Chrome Gemini Nano first, otherwise the Transformers.js worker. Rewrite, draft, and summarize run locally; no AI request ever reaches the API. Models download once into `transformers-cache`; when one cannot start (memory/GPU), the next candidate runs in a fresh worker and the choice is remembered. Phones run WASM only: iPhone/iPad and Android under 6 GB get SmolLM2 135M (q8, ~140 MB), larger Android gets 360M first. A model that crashed the visible tab is recorded (`smack.ai.localAttempt` → `smack.ai.localBlocked`) and skipped; deleting the model in Settings clears that. A silent worker is stopped by a watchdog, and an idle or backgrounded phone worker is terminated to free memory.
+- On-device AI (`ai.js`, `agent.js`): Chrome Gemini Nano first, otherwise the Transformers.js worker. Rewrite, draft, and summarize run locally. Ask AI can run up to three actions on the device — draft, reply, rewrite, summarize, search, open, unread, or a clock punch. A draft or reply is sent, and a punch runs immediately. No AI request reaches the API. Models download once into `transformers-cache`; when one cannot start (memory/GPU), the next candidate runs in a fresh worker and the choice is remembered. Phones run WASM only: iPhone/iPad and Android under 6 GB get SmolLM2 135M (q8, ~140 MB), larger Android gets 360M first. A model that crashed the visible tab is recorded (`smack.ai.localAttempt` → `smack.ai.localBlocked`) and skipped; deleting the model in Settings clears that. A silent worker is stopped by a watchdog, and an idle or backgrounded phone worker is terminated to free memory.
 
 ## Pages
 
@@ -77,7 +77,7 @@ Punch actions: `check_in`, `break_in`, `break_out`, `check_out`. Checkout writes
 | Billing | `BillingController`, `config/smackchat.php` |
 | Push | `PushController`, `resources/js/push.js` |
 | Live | `office.js`, `realtime.js`, `AblyPublisher` |
-| On-device AI | `resources/js/ai.js`, `resources/js/workers/ai.worker.js` |
+| On-device AI | `resources/js/ai.js`, `resources/js/agent.js`, `resources/js/workers/ai.worker.js` |
 | Chat UI | `ChannelView.vue`, `Composer.vue`, `resources/css/app.css` |
 | Tests | `tests/Feature/OfficeChatTest.php`, `tests/Unit/*` |
 

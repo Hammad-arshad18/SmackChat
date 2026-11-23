@@ -5,6 +5,7 @@ import { useToast } from '@/toast';
 import api, { errorText } from '@/api';
 import BrandMark from '@/components/BrandMark.vue';
 import CommandPalette from '@/components/CommandPalette.vue';
+import AgentAsk from '@/components/AgentAsk.vue';
 import WorkspaceNav from '@/components/WorkspaceNav.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
@@ -32,6 +33,7 @@ const dmOpen = ref(false);
 const workspaceOpen = ref(false);
 const shortcutsOpen = ref(false);
 const permissionsOpen = ref(false);
+const agentOpen = ref(false);
 const permissionsBusy = ref(false);
 const busy = ref(false);
 const notifications = ref(null);
@@ -732,7 +734,20 @@ function openNotifications(event) {
             </div>
         </Dialog>
 
-        <CommandPalette @channel="channelOpen = true" @dm="dmOpen = true" @workspaces="workspaceOpen = true" />
+        <CommandPalette @channel="channelOpen = true" @dm="dmOpen = true" @workspaces="workspaceOpen = true" @ask="agentOpen = true" />
+
+        <Dialog v-model:visible="agentOpen" modal :style="{ width: '28rem' }" class="smack-dialog">
+            <template #header>
+                <div class="dialog-title">
+                    <span class="dialog-icon"><i class="pi pi-sparkles" /></span>
+                    <div>
+                        <strong>Ask on-device AI</strong>
+                        <small>It sends messages and updates your clock. No extra confirm.</small>
+                    </div>
+                </div>
+            </template>
+            <AgentAsk :heading="false" @close="agentOpen = false" />
+        </Dialog>
     </div>
 
     <div v-else class="boot-screen">
