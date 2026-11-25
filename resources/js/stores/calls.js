@@ -5,10 +5,16 @@ import { startRingtone, stopRingtone } from '@/lib/ringtone';
 import { realtimeConnected } from '@/realtime';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
+import { useUiStore } from '@/stores/ui';
 
 const RING_WINDOW_MS = 60000;
 const RING_TIMEOUT_MS = 45000;
 const ANSWER_TIMEOUT_MS = 60000;
+// How often to ask the server which calls are live. Ably delivers a ring at
+// once; this is the path for an office without Ably, and the safety net with it.
+const ACTIVE_POLL_LIVE_MS = 15000;
+const ACTIVE_POLL_MS = 4000;
+const ACTIVE_POLL_RINGING_MS = 2500;
 const SIGNAL_POLL_MS = 700;
 const SYNC_MS = 1000;
 const ANSWER_WAIT_MS = 8000;
@@ -23,6 +29,33 @@ function xsrfToken() {
     const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
 
     return match ? decodeURIComponent(match[1]) : '';
+}
+
+// Remembers, for this tab only, the call it is sitting in. A tab that is
+// reloaded or crashes mid-call finds it here on the next load and gives the
+// seat back, so the other person is not left in a call with nobody.
+const SEAT_KEY = 'smack.call.seat';
+
+function rememberSeat(seat) {
+    try {
+        if (seat) {
+            sessionStorage.setItem(SEAT_KEY, JSON.stringify(seat));
+        } else {
+            sessionStorage.removeItem(SEAT_KEY);
+        }
+    } catch {
+        /* private mode: the server prunes the seat instead */
+    }
+}
+
+function rememberedSeat() {
+    try {
+        const seat = JSON.parse(sessionStorage.getItem(SEAT_KEY) || 'null');
+
+        return seat?.id && seat?.slug ? seat : null;
+    } catch {
+        return null;
+    }
 }
 
 function newSession() {
@@ -69,6 +102,11 @@ export const useCallStore = defineStore('calls', () => {
     const activeCalls = ref([]);
     const participants = ref([]);
     const remoteStreams = ref({});
+    // One audio-only stream per person. Sound is played from these, never
+    // from the video tiles: a voice call's stream carries a video track that
+    // never delivers a frame, and a <video> waiting for that frame stays
+    // silent.
+    const remoteAudio = ref({});
     const localStream = shallowRef(null);
     const connection = ref('idle');
     const error = ref('');
@@ -118,11 +156,50 @@ export const useCallStore = defineStore('calls', () => {
         attached = true;
         window.addEventListener('smack-call', onRealtimeCall);
         window.addEventListener('pagehide', onPageHide);
+        window.addEventListener('pageshow', onPageShow);
+        window.addEventListener('focus', onWake);
+        window.addEventListener('online', onWake);
+        document.addEventListener('visibilitychange', onWake);
         navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
-        refreshActive();
-        joinFromLink();
-        ringTimer = setInterval(refreshActive, realtimeConnected() ? 20000 : 10000);
+        releaseLeftoverSeat().finally(() => {
+            refreshActive();
+            joinFromLink();
+        });
+        scheduleRefresh();
         clockTimer = setInterval(tick, 1000);
+    }
+
+    /**
+     * Keep the list of live calls fresh. Faster while a ring is on screen, so
+     * a caller who gives up stops this device ringing within a few seconds
+     * even when there is no Ably to say so.
+     */
+    function scheduleRefresh() {
+        clearTimeout(ringTimer);
+        ringTimer = null;
+
+        if (!attached) {
+            return;
+        }
+
+        const wait = incoming.value
+            ? ACTIVE_POLL_RINGING_MS
+            : (realtimeConnected() ? ACTIVE_POLL_LIVE_MS : ACTIVE_POLL_MS);
+
+        ringTimer = setTimeout(async () => {
+            await refreshActive();
+            scheduleRefresh();
+        }, wait);
+    }
+
+    /**
+     * A background tab's timers are slowed down or frozen. The moment the
+     * tab is looked at again, or the network returns, catch up at once.
+     */
+    function onWake() {
+        if (document.visibilityState === 'visible') {
+            refreshActive();
+        }
     }
 
     function detach() {
@@ -133,8 +210,12 @@ export const useCallStore = defineStore('calls', () => {
         attached = false;
         window.removeEventListener('smack-call', onRealtimeCall);
         window.removeEventListener('pagehide', onPageHide);
+        window.removeEventListener('pageshow', onPageShow);
+        window.removeEventListener('focus', onWake);
+        window.removeEventListener('online', onWake);
+        document.removeEventListener('visibilitychange', onWake);
         navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
-        clearInterval(ringTimer);
+        clearTimeout(ringTimer);
         clearInterval(clockTimer);
         ringTimer = null;
         clockTimer = null;
@@ -157,11 +238,31 @@ export const useCallStore = defineStore('calls', () => {
         try {
             const { data } = await api.get(`/workspaces/${office.slug}/calls/active`);
             activeCalls.value = data.calls || [];
+            settleIncoming();
             maybeRing();
         } catch {
             /* the next pass retries */
         } finally {
             refreshing = false;
+        }
+    }
+
+    /**
+     * Stop ringing for a call that is gone: the caller gave up, it rang out,
+     * or this person answered it on another device.
+     */
+    function settleIncoming() {
+        const ringing = incoming.value;
+
+        if (!ringing) {
+            return;
+        }
+
+        const current = activeCalls.value.find((item) => item.id === ringing.id);
+
+        if (!current || current.status !== 'live' || current.joined || current.was_in) {
+            dismissed.add(ringing.id);
+            clearIncoming();
         }
     }
 
@@ -172,6 +273,11 @@ export const useCallStore = defineStore('calls', () => {
 
         const fresh = activeCalls.value.find((item) => {
             if (item.status !== 'live' || item.joined || item.started_by === myId.value) {
+                return false;
+            }
+
+            // Someone who was in the call and hung up is not rung again.
+            if (item.was_in) {
                 return false;
             }
 
@@ -190,7 +296,8 @@ export const useCallStore = defineStore('calls', () => {
     function ring(payload) {
         clearIncoming();
         incoming.value = payload;
-        startRingtone();
+        startRingtone(RING_TIMEOUT_MS, useUiStore().preferences.ringtone);
+        scheduleRefresh();
 
         incomingTimer = setTimeout(() => {
             if (incoming.value?.id !== payload.id) {
@@ -205,10 +312,16 @@ export const useCallStore = defineStore('calls', () => {
     }
 
     function clearIncoming() {
+        const wasRinging = incoming.value !== null;
         stopRingtone();
         clearTimeout(incomingTimer);
         incomingTimer = null;
         incoming.value = null;
+
+        if (wasRinging) {
+            // Back to the slower polling rate.
+            scheduleRefresh();
+        }
     }
 
     function startOutgoingTimer() {
@@ -224,12 +337,30 @@ export const useCallStore = defineStore('calls', () => {
         }, ANSWER_TIMEOUT_MS);
     }
 
-    function noteParticipants() {
-        if (participants.value.length > 1 && outgoing.value) {
-            outgoing.value = false;
-            clearTimeout(outgoingTimer);
-            outgoingTimer = null;
+    /**
+     * The other person picked up. The clock counts the conversation, not the
+     * time spent ringing.
+     */
+    function markAnswered() {
+        if (!outgoing.value) {
+            return;
         }
+
+        outgoing.value = false;
+        clearTimeout(outgoingTimer);
+        outgoingTimer = null;
+        joinedAt = Date.now();
+        tick();
+    }
+
+    function noteParticipants() {
+        if (participants.value.length > 1) {
+            markAnswered();
+        }
+    }
+
+    function endedText() {
+        return call.value?.channel_type === 'dm' ? 'The call ended.' : 'The huddle ended.';
     }
 
     function onRealtimeCall(event) {
@@ -252,7 +383,7 @@ export const useCallStore = defineStore('calls', () => {
             }
 
             if (call.value?.id === id) {
-                endLocally('The call ended.');
+                endLocally(endedText());
             }
 
             refreshActive();
@@ -294,11 +425,13 @@ export const useCallStore = defineStore('calls', () => {
     }
 
     /**
-     * Free the seat when the tab closes or reloads, so the others drop the
-     * dead connection at once instead of after the stale timeout.
+     * Free the seat when the tab closes or reloads, so the other person's
+     * call ends at once instead of after the stale timeout. This also runs
+     * when the page is only being put aside by the browser: a frozen page
+     * cannot carry a call either.
      */
-    function onPageHide(event) {
-        if (!call.value || !workspaceSlug || event.persisted) {
+    function onPageHide() {
+        if (!call.value || !workspaceSlug) {
             return;
         }
 
@@ -314,8 +447,35 @@ export const useCallStore = defineStore('calls', () => {
                 },
             });
         } catch {
-            /* the server prunes the seat later */
+            /* the next load of this tab gives the seat back */
         }
+    }
+
+    /**
+     * The browser brought this page back from its cache. The seat was given
+     * up on the way out, so the call on screen is no longer real.
+     */
+    function onPageShow(event) {
+        if (event.persisted && call.value) {
+            cleanup();
+            refreshActive();
+        }
+    }
+
+    /**
+     * This tab was in a call when it was reloaded or closed and the goodbye
+     * never reached the server. Give the seat back now.
+     */
+    async function releaseLeftoverSeat() {
+        const seat = rememberedSeat();
+
+        if (!seat || call.value) {
+            return;
+        }
+
+        rememberSeat(null);
+        dismissed.add(seat.id);
+        await leaveServer(seat.id, seat.slug);
     }
 
     async function start(channel, kind = 'audio') {
@@ -458,6 +618,7 @@ export const useCallStore = defineStore('calls', () => {
         }
 
         dismissed.delete(payload.id);
+        rememberSeat({ id: payload.id, slug: workspaceSlug });
         joinedAt = Date.now();
         lastSignalId = 0;
         mediaReady = false;
@@ -727,12 +888,17 @@ export const useCallStore = defineStore('calls', () => {
 
     function publishRemote(peerId, stream) {
         remoteStreams.value = { ...remoteStreams.value, [peerId]: stream };
+        markAnswered();
+    }
 
-        if (outgoing.value) {
-            outgoing.value = false;
-            clearTimeout(outgoingTimer);
-            outgoingTimer = null;
+    function publishAudio(peerId, track) {
+        const current = remoteAudio.value[peerId];
+
+        if (current?.getAudioTracks().includes(track)) {
+            return;
         }
+
+        remoteAudio.value = { ...remoteAudio.value, [peerId]: new MediaStream([track]) };
     }
 
     function updateConnection() {
@@ -792,6 +958,9 @@ export const useCallStore = defineStore('calls', () => {
             const next = { ...remoteStreams.value };
             delete next[key];
             remoteStreams.value = next;
+            const audioNext = { ...remoteAudio.value };
+            delete audioNext[key];
+            remoteAudio.value = audioNext;
         }
 
         updateConnection();
@@ -935,6 +1104,11 @@ export const useCallStore = defineStore('calls', () => {
 
             state.stream = stream;
             publishRemote(key, stream);
+
+            if (event.track.kind === 'audio') {
+                publishAudio(key, event.track);
+            }
+
             const refresh = () => publishRemote(key, stream);
             event.track.addEventListener('unmute', refresh);
             event.track.addEventListener('mute', refresh);
@@ -1322,7 +1496,7 @@ export const useCallStore = defineStore('calls', () => {
             const next = data.call;
 
             if (!next || next.status === 'ended') {
-                endLocally('The huddle ended.');
+                endLocally(endedText());
 
                 return;
             }
@@ -1403,6 +1577,14 @@ export const useCallStore = defineStore('calls', () => {
     function cleanup() {
         stopTimers();
 
+        // Whatever happens to this call next, this device has been in it and
+        // must not ring for it again.
+        if (call.value?.id) {
+            dismissed.add(call.value.id);
+        }
+
+        rememberSeat(null);
+
         for (const state of peers.values()) {
             clearPeerTimers(state);
             state.closed = true;
@@ -1418,6 +1600,7 @@ export const useCallStore = defineStore('calls', () => {
         mediaReady = false;
         mySession = '';
         remoteStreams.value = {};
+        remoteAudio.value = {};
         remoteSharing.value = {};
 
         if (screenTrack) {
@@ -1607,6 +1790,7 @@ export const useCallStore = defineStore('calls', () => {
         activeCalls,
         participants,
         remoteStreams,
+        remoteAudio,
         localStream,
         connection,
         error,

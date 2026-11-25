@@ -96,12 +96,11 @@ class WebPushNotifier
 
         $channel = $call->channel;
         $isDm = $channel->type === Channel::DM;
-        $title = $isDm
-            ? ($call->kind === Call::VIDEO ? 'Incoming video call' : 'Incoming call')
-            : 'Incoming huddle';
+        // The caller is the headline, the way a phone shows a call.
+        $title = $caller->name;
         $body = $isDm
-            ? $caller->name.' is calling'
-            : $caller->name.' started a huddle in #'.$channel->name;
+            ? ($call->kind === Call::VIDEO ? 'Incoming video call' : 'Incoming voice call')
+            : 'Huddle in #'.$channel->name;
         $startedAt = $call->started_at ?? now();
         $ringFor = max(30, (int) config('smackchat.call_ring_seconds', 75));
 

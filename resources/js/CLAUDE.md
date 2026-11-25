@@ -26,6 +26,14 @@ Vue 3 SPA with Pinia, PrimeVue, and a TipTap composer. Laravel serves one Blade 
 - `?thread=` must survive a refresh, and closing the thread removes it.
 - `?call={id}` joins once and is then removed from the URL.
 
+## Calls
+
+- `CallDock.vue` is the whole call UI: the dock (voice card, dark video stage, minimized, full screen) and the incoming ring. Its styles are one block in `app.css` driven by the `--call-*` variables.
+- The incoming screen (`.call-ring`) is a full phone-style screen under 640px and a dark corner banner above it. Its buttons are plain `<button>`s, not PrimeVue ones.
+- `lib/ringtone.js` draws each ringtone into a buffer and loops it. Add a tone to `TONES` and `RINGTONES` together; Settings lists `RINGTONES`.
+- Sound comes from `CallAudio.vue` and `calls.remoteAudio`. Video tiles are muted. Do not route a voice through a `<video>`.
+- With two people the other person fills the stage and the self view sits in a corner (`duo`); tapping the small tile swaps them. Pins show from three people up.
+
 ## Realtime
 
 - Assume Ably may be absent. Anything that reacts to a live event also needs a polling path that reaches the same state: `ChannelView.vue` polls the open conversation, `stores/office.js` polls channels and the shift, `stores/calls.js` polls active calls and signals. Polling keeps running at a slower rate when Ably is connected.

@@ -135,19 +135,48 @@ class CallService
     public function leave(Call $call, User $user): void
     {
         DB::transaction(function () use ($call, $user) {
-            $call->participants()
+            // Two people hanging up at the same moment must not each see the
+            // other as still seated and leave a call nobody is in.
+            $locked = Call::query()->lockForUpdate()->findOrFail($call->id);
+
+            if ($locked->status === Call::ENDED) {
+                return;
+            }
+
+            $locked->participants()
                 ->where('user_id', $user->id)
                 ->whereNull('left_at')
                 ->update(['left_at' => now()]);
 
-            $remaining = $call->participants()->whereNull('left_at')->count();
+            // Their handshake belongs to a connection that is closed now.
+            $locked->signals()
+                ->where(fn ($query) => $query->where('to_user_id', $user->id)->orWhere('from_user_id', $user->id))
+                ->delete();
 
-            if ($remaining === 0) {
-                $this->end($call, 'call.ended');
+            if ($this->isOver($locked)) {
+                $this->end($locked, 'call.ended');
             } else {
-                $this->nudge($call, 'call.left', ['user_id' => $user->id]);
+                $this->nudge($locked, 'call.left', ['user_id' => $user->id]);
             }
         });
+    }
+
+    /**
+     * A call needs two people. It is over when nobody is seated, or when one
+     * person is left after someone else had joined: hanging up ends the call
+     * for the other side too, instead of leaving them in an empty room.
+     */
+    private function isOver(Call $call): bool
+    {
+        $seated = $call->participants()->whereNull('left_at')->count();
+
+        if ($seated === 0) {
+            // A call that was just created has no participant row yet; the
+            // starter is being seated right now.
+            return $call->participants()->exists();
+        }
+
+        return $seated === 1 && $call->participants()->count() > 1;
     }
 
     public function end(Call $call, string $event = 'call.ended'): void
@@ -335,6 +364,9 @@ class CallService
             'max_participants' => $this->limit($call->workspace),
             'group_enabled' => $call->workspace->plan === 'archive',
             'joined' => $call->participants->contains(fn (CallParticipant $participant) => $participant->user_id === $viewer->id && $participant->left_at === null),
+            // True once the viewer has been in this call and hung up. The
+            // client must not ring them for it again.
+            'was_in' => $call->participants->contains(fn (CallParticipant $participant) => $participant->user_id === $viewer->id && $participant->left_at !== null),
             'participants' => $participants,
         ];
     }
@@ -385,16 +417,13 @@ class CallService
             return;
         }
 
-        $seated = $call->participants()->whereNull('left_at')->count();
-
-        // A call that was just created has no participant row yet; the
-        // starter is being seated right now.
-        if ($seated === 0 && $call->participants()->exists()) {
+        if ($this->isOver($call)) {
             $this->end($call);
 
             return;
         }
 
+        $seated = $call->participants()->whereNull('left_at')->count();
         $ringFor = max(30, (int) config('smackchat.call_ring_seconds', 75));
         $unanswered = $seated === 1
             && $call->participants()->count() === 1

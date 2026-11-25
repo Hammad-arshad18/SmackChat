@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useToast } from '@/toast';
+import CallAudio from '@/components/CallAudio.vue';
 import CallVideo from '@/components/CallVideo.vue';
 import { unlockAudio } from '@/lib/ringtone';
 import { useAuthStore } from '@/stores/auth';
@@ -16,6 +17,8 @@ const toast = useToast();
 
 const dock = ref(null);
 const expanded = ref(false);
+// Folds the dock down to its title and buttons so the chat stays usable.
+const minimized = ref(false);
 const soundBlocked = ref(false);
 const pinned = ref(null);
 const manualPin = ref(false);
@@ -27,6 +30,7 @@ let titleTimer = null;
 let titleFlip = false;
 let lastTitle = '';
 let notification = null;
+let ringTag = '';
 
 const timer = computed(() => {
     const total = calls.elapsed;
@@ -51,6 +55,12 @@ const caller = computed(() => {
         || target.participants?.[0]
         || null;
 });
+const ringName = computed(() => caller.value?.name || calls.incoming?.channel_label || 'A teammate');
+const ringIcon = computed(() => (kindLabel.value === 'video' ? 'pi pi-video' : 'pi pi-phone'));
+// The same words the call push uses, so the screen and the notification match.
+const ringLine = computed(() => (isDm.value
+    ? `Incoming ${kindLabel.value} call`
+    : `Huddle in #${calls.incoming?.channel_label || 'channel'}`));
 const remoteList = computed(() => calls.others);
 const waiting = computed(() => calls.outgoing && remoteList.value.length === 0);
 const localVideo = computed(() => Boolean(calls.localStream?.getVideoTracks?.().length));
@@ -63,6 +73,21 @@ const waitingName = computed(() => {
     return calls.call?.channel_label || 'the channel';
 });
 const outgoingLabel = computed(() => (isDm.value ? `Calling ${waitingName.value}…` : `Ringing ${waitingName.value}…`));
+const status = computed(() => {
+    if (calls.outgoing) {
+        return { text: 'Ringing…', timer: false };
+    }
+
+    if (calls.connection === 'failed') {
+        return { text: 'Reconnecting…', timer: false };
+    }
+
+    if (calls.connection === 'connecting') {
+        return { text: 'Connecting…', timer: false };
+    }
+
+    return { text: timer.value, timer: true };
+});
 
 const tiles = computed(() => [
     {
@@ -112,6 +137,9 @@ const orderedTiles = computed(() => {
 
     return [focus, ...tiles.value.filter((tile) => tile.id !== focus.id)];
 });
+// Two people: the other person fills the stage and you sit in a corner.
+const duo = computed(() => Boolean(focusTile.value) && tiles.value.length === 2);
+const showPins = computed(() => tiles.value.length > 2);
 
 function togglePin(id) {
     if (manualPin.value && pinned.value === id) {
@@ -123,12 +151,24 @@ function togglePin(id) {
 
     pinned.value = id;
     manualPin.value = true;
-    expanded.value = true;
+}
+
+/**
+ * Tapping a small tile brings that person to the front. With two people it
+ * swaps who is large.
+ */
+function focusOn(tile) {
+    if (focusTile.value && focusTile.value.id !== tile.id) {
+        togglePin(tile.id);
+    }
 }
 
 watch(sharer, (tile) => {
-    if (tile) {
+    // Open up for someone else's screen, not for your own: a full-screen
+    // call would cover the very thing you are sharing.
+    if (tile && !tile.local) {
         expanded.value = true;
+        minimized.value = false;
     }
 });
 
@@ -143,10 +183,12 @@ function personFor(userId) {
 }
 
 async function pumpAudio() {
-    const media = [...document.querySelectorAll('.call-dock video, .call-dock audio')]
-        .filter((node) => !node.muted && node.srcObject?.getAudioTracks?.().length);
+    const media = [...document.querySelectorAll('.call-dock audio')]
+        .filter((node) => node.srcObject?.getAudioTracks?.().length);
 
     if (!media.length) {
+        soundBlocked.value = false;
+
         return;
     }
 
@@ -155,10 +197,10 @@ async function pumpAudio() {
         && result.reason?.name !== 'AbortError');
 }
 
-watch(() => calls.remoteStreams, () => {
+watch(() => calls.remoteAudio, () => {
     nextTick(pumpAudio);
     setTimeout(pumpAudio, 900);
-}, { deep: true });
+});
 
 function onNotice(event) {
     toast.add({
@@ -169,23 +211,70 @@ function onNotice(event) {
     });
 }
 
-function notifyIncoming(payload) {
-    closeNotification();
+/**
+ * Ring through the system when nobody is looking at the app: a tab in the
+ * background, or a window behind another one. It uses the same tag and data
+ * as the call push, so the two never stack and a tap is handled the same way.
+ */
+async function notifyIncoming(payload) {
+    await closeNotification();
 
     if (!payload || typeof Notification === 'undefined' || Notification.permission !== 'granted') {
         return;
     }
 
-    if (!document.hidden) {
+    if (document.visibilityState === 'visible' && document.hasFocus()) {
         return;
     }
 
+    // The caller is the headline, as on a phone.
+    const title = ringName.value;
+    const body = ringLine.value;
+    const tag = `smack-call-${payload.id}`;
+    const data = {
+        url: `/w/${office.slug}/c/${payload.channel_slug}?call=${payload.id}`,
+        call_id: payload.id,
+        workspace: office.slug,
+        kind: 'call',
+    };
+    ringTag = tag;
+
     try {
-        notification = new Notification(`Incoming ${kindLabel.value} ${noun.value}`, {
-            body: `${caller.value?.name || 'A teammate'} is ${noun.value === 'call' ? 'calling' : 'starting a huddle'}`,
-            tag: 'smack-call',
-            requireInteraction: true,
-        });
+        const registration = await navigator.serviceWorker?.getRegistration('/');
+
+        if (registration?.showNotification) {
+            const open = await registration.getNotifications({ tag });
+
+            // The push got here first, or the ring was answered meanwhile.
+            if (open.length || calls.incoming?.id !== payload.id) {
+                return;
+            }
+
+            const icon = `${window.location.origin}/icons/smack-192.png`;
+
+            await registration.showNotification(title, {
+                body,
+                tag,
+                data,
+                icon,
+                badge: icon,
+                requireInteraction: true,
+                renotify: true,
+                vibrate: [600, 300, 600, 300, 600],
+                actions: [
+                    { action: 'answer', title: 'Answer' },
+                    { action: 'decline', title: 'Decline' },
+                ],
+            }).catch(() => registration.showNotification(title, { body, tag, data }));
+
+            return;
+        }
+    } catch {
+        /* fall through to the page notification */
+    }
+
+    try {
+        notification = new Notification(title, { body, tag, requireInteraction: true });
         notification.onclick = () => {
             window.focus();
             notification?.close();
@@ -196,7 +285,7 @@ function notifyIncoming(payload) {
     }
 }
 
-function closeNotification() {
+async function closeNotification() {
     try {
         notification?.close();
     } catch {
@@ -204,6 +293,23 @@ function closeNotification() {
     }
 
     notification = null;
+
+    const tag = ringTag;
+    ringTag = '';
+
+    if (!tag) {
+        return;
+    }
+
+    try {
+        const registration = await navigator.serviceWorker?.getRegistration('/');
+        const open = await registration?.getNotifications({ tag }) || [];
+
+        // Leave a "Missed call" that replaced the ring where it is.
+        open.filter((item) => item.data?.kind === 'call').forEach((item) => item.close());
+    } catch {
+        /* nothing to close */
+    }
 }
 
 function restoreTitle() {
@@ -266,6 +372,9 @@ watch(() => calls.incoming, (payload) => {
 });
 
 watch(() => calls.inCall, (active) => {
+    minimized.value = false;
+    soundBlocked.value = false;
+
     if (!active) {
         pinned.value = null;
         manualPin.value = false;
@@ -287,6 +396,7 @@ async function toggleExpanded() {
     }
 
     expanded.value = true;
+    minimized.value = false;
 
     try {
         if (document.fullscreenEnabled && dock.value && !document.fullscreenElement) {
@@ -348,7 +458,7 @@ watch(() => office.slug, async (slug) => {
         v-if="calls.inCall"
         ref="dock"
         class="call-dock"
-        :class="{ expanded, stage: stageMode }"
+        :class="{ expanded, stage: stageMode, minimized: minimized && !expanded, duo }"
         role="dialog"
         :aria-label="`${kindLabel} ${noun}`"
     >
@@ -358,8 +468,17 @@ watch(() => office.slug, async (slug) => {
                 <strong>{{ calls.call.channel_label || 'Call' }}</strong>
             </div>
             <div class="call-dock-meta">
-                <span v-if="calls.outgoing" class="call-ringing">Ringing…</span>
-                <span v-else class="call-timer">{{ timer }}</span>
+                <span class="call-status" :class="status.timer ? 'timer' : 'pulse'" aria-live="polite">{{ status.text }}</span>
+                <Button
+                    v-if="!expanded"
+                    :icon="minimized ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+                    text
+                    rounded
+                    size="small"
+                    :aria-label="minimized ? `Show the ${noun}` : `Minimize the ${noun}`"
+                    v-tooltip.bottom="minimized ? 'Show' : 'Minimize'"
+                    @click="minimized = !minimized"
+                />
                 <Button
                     :icon="expanded ? 'pi pi-window-minimize' : 'pi pi-expand'"
                     text
@@ -372,7 +491,7 @@ watch(() => office.slug, async (slug) => {
             </div>
         </header>
 
-        <div class="call-stage" :class="{ audio: !hasVideo && !sharer, outgoing: waiting, 'has-pin': Boolean(focusTile) }" @pointerdown="pumpAudio">
+        <div class="call-stage" :class="{ outgoing: waiting, 'has-pin': Boolean(focusTile) && !waiting }" @pointerdown="pumpAudio">
             <div v-if="waiting" class="call-outgoing">
                 <span class="call-outgoing-pulse"><i class="pi pi-phone" /></span>
                 <strong>{{ outgoingLabel }}</strong>
@@ -385,21 +504,21 @@ watch(() => office.slug, async (slug) => {
                     :key="tile.id"
                     class="call-tile"
                     :class="{ local: tile.local, share: tile.share, pinned: focusTile?.id === tile.id, film: focusTile && focusTile.id !== tile.id }"
+                    @click="focusOn(tile)"
                 >
+                    <!-- Picture only. Voices play from the sinks below. -->
                     <CallVideo
-                        v-if="tile.stream && (tile.video || !tile.local)"
+                        v-if="tile.stream && tile.video"
                         :stream="tile.stream"
-                        :muted="tile.local"
+                        muted
                         :mirror="tile.local && calls.cameraOn && !calls.sharing"
                         :fit="tile.share ? 'contain' : 'cover'"
-                        :class="{ 'is-audio': !tile.video }"
-                        @blocked="soundBlocked = true"
-                        @playing="pumpAudio"
                     />
-                    <div v-if="!tile.video" class="call-audio-avatar">
+                    <div v-else class="call-audio-avatar">
                         <PersonAvatar :person="tile.person" :name="tile.name" :size="focusTile?.id === tile.id ? 'xlarge' : 'large'" />
                     </div>
                     <button
+                        v-if="showPins"
                         type="button"
                         class="call-pin"
                         :class="{ active: manualPin && pinned === tile.id }"
@@ -416,13 +535,22 @@ watch(() => office.slug, async (slug) => {
                 </div>
             </template>
 
-            <p v-if="calls.connection === 'failed'" class="call-connecting">Can't reach them yet. Still trying…</p>
-            <p v-else-if="calls.connection === 'connecting' && !waiting" class="call-connecting">Connecting…</p>
-
-            <button v-if="soundBlocked && !waiting" type="button" class="call-sound" @click.stop="pumpAudio">
-                <i class="pi pi-volume-up" /> Tap to hear the call
-            </button>
+            <p v-if="calls.connection === 'failed' && !waiting" class="call-stage-note">Can't reach them yet. Still trying…</p>
         </div>
+
+        <div class="call-sinks" aria-hidden="true">
+            <CallAudio
+                v-for="person in remoteList"
+                :key="person.user_id"
+                :stream="calls.remoteAudio[person.user_id] || null"
+                @blocked="soundBlocked = true"
+                @playing="pumpAudio"
+            />
+        </div>
+
+        <button v-if="soundBlocked" type="button" class="call-sound" @click.stop="pumpAudio">
+            <i class="pi pi-volume-up" /> Tap to hear the {{ noun }}
+        </button>
 
         <footer class="call-controls">
             <Button
@@ -437,7 +565,7 @@ watch(() => office.slug, async (slug) => {
             <Button
                 icon="pi pi-video"
                 rounded
-                :severity="calls.cameraOn ? 'secondary' : 'danger'"
+                severity="secondary"
                 :aria-label="calls.cameraOn ? 'Turn camera off' : 'Turn camera on'"
                 :class="{ 'call-off': !calls.cameraOn }"
                 v-tooltip.top="calls.cameraOn ? 'Camera off' : 'Camera on'"
@@ -453,7 +581,7 @@ watch(() => office.slug, async (slug) => {
                 @click="calls.toggleShare()"
             />
             <Button
-                :label="calls.outgoing ? 'Cancel' : 'Leave'"
+                :label="calls.outgoing ? 'Cancel' : (isDm ? 'End' : 'Leave')"
                 icon="pi pi-phone"
                 severity="danger"
                 rounded
@@ -469,44 +597,43 @@ watch(() => office.slug, async (slug) => {
     <div
         v-if="calls.incoming && !calls.inCall"
         class="call-ring"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="`Incoming ${kindLabel} ${noun}`"
+        role="alertdialog"
+        :aria-label="`Incoming ${kindLabel} ${noun} from ${ringName}`"
     >
-        <div class="call-ring-stage">
-            <p class="card-kicker">Incoming {{ kindLabel }} {{ noun }}</p>
+        <div class="call-ring-card">
+            <div class="call-ring-who">
+                <p class="call-ring-app"><i :class="ringIcon" /> SmackChat {{ kindLabel }} {{ noun }}</p>
+                <h2>{{ ringName }}</h2>
+                <p class="call-ring-sub">{{ ringLine }}</p>
+            </div>
+
             <div class="call-ring-avatar">
                 <span class="call-ring-wave wave-one" />
                 <span class="call-ring-wave wave-two" />
-                <PersonAvatar :person="caller" :name="caller?.name || calls.incoming.channel_label" size="xlarge" />
+                <PersonAvatar :person="caller" :name="ringName" size="xlarge" />
             </div>
-            <h2>{{ caller?.name || calls.incoming.channel_label || 'A teammate' }}</h2>
-            <p class="call-ring-sub">
-                <template v-if="isDm">Direct {{ kindLabel }} call</template>
-                <template v-else>
-                    {{ calls.incoming.channel_label }}
-                    <span class="dot-sep">·</span>
-                    Huddle
-                </template>
-            </p>
-            <p class="call-ring-hint">Ringing on this device</p>
 
             <div class="call-ring-actions">
-                <Button
-                    label="Decline"
-                    icon="pi pi-phone"
-                    severity="danger"
-                    rounded
-                    class="call-ring-decline"
+                <button
+                    type="button"
+                    class="call-ring-btn decline"
+                    aria-label="Decline"
+                    :disabled="calls.busy"
                     @click="calls.declineIncoming()"
-                />
-                <Button
-                    label="Accept"
-                    icon="pi pi-phone"
-                    rounded
-                    class="call-ring-accept"
+                >
+                    <span class="call-ring-icon"><i class="pi pi-phone" /></span>
+                    <em aria-hidden="true">Decline</em>
+                </button>
+                <button
+                    type="button"
+                    class="call-ring-btn accept"
+                    aria-label="Accept"
+                    :disabled="calls.busy"
                     @click="calls.acceptIncoming()"
-                />
+                >
+                    <span class="call-ring-icon"><i :class="calls.busy ? 'pi pi-spin pi-spinner' : ringIcon" /></span>
+                    <em aria-hidden="true">Accept</em>
+                </button>
             </div>
         </div>
     </div>

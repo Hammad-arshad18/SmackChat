@@ -230,6 +230,115 @@ class CallsTest extends TestCase
             ->assertJsonCount(0, 'calls');
     }
 
+    public function test_hanging_up_ends_the_call_for_the_other_person(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $lin = $this->member($workspace, 'Lin');
+        $nudges = $this->captureNudges();
+
+        $slug = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/dms", ['user_id' => $lin->id])
+            ->assertSuccessful()
+            ->json('slug');
+
+        $call = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => $slug])
+            ->json('call');
+
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/join")
+            ->assertOk();
+
+        // Lin hangs up. Ada must not be left sitting in a call with nobody.
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/leave")
+            ->assertOk();
+
+        $this->assertSame(Call::ENDED, Call::findOrFail($call['id'])->status);
+        $this->assertContains('call.ended', array_column($nudges->events, 'event'));
+        $this->assertNotContains('call.left', array_column($nudges->events, 'event'));
+
+        // Nothing is left to ring either of them again.
+        foreach ([$owner, $lin] as $person) {
+            $this->actingAs($person, 'sanctum')
+                ->getJson("/api/workspaces/{$workspace->slug}/calls/active")
+                ->assertOk()
+                ->assertJsonCount(0, 'calls');
+        }
+
+        // A second goodbye from the same tab (page close after Leave) is harmless.
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/leave")
+            ->assertOk();
+    }
+
+    public function test_a_group_huddle_goes_on_until_one_person_is_left(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $workspace->update(['plan' => 'archive']);
+        $lin = $this->member($workspace, 'Lin');
+        $grace = $this->member($workspace, 'Grace');
+
+        $call = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->json('call');
+
+        foreach ([$lin, $grace] as $person) {
+            $this->actingAs($person, 'sanctum')
+                ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/join")
+                ->assertOk();
+        }
+
+        $this->actingAs($grace, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/leave")
+            ->assertOk();
+
+        $this->assertSame(Call::LIVE, Call::findOrFail($call['id'])->status);
+
+        // Grace sees the huddle is still on, marked as one she already left,
+        // so her device offers Join instead of ringing her again.
+        $this->actingAs($grace, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/calls/active")
+            ->assertOk()
+            ->assertJsonCount(1, 'calls')
+            ->assertJsonPath('calls.0.joined', false)
+            ->assertJsonPath('calls.0.was_in', true);
+
+        $this->actingAs($lin, 'sanctum')
+            ->getJson("/api/workspaces/{$workspace->slug}/calls/active")
+            ->assertOk()
+            ->assertJsonPath('calls.0.joined', true)
+            ->assertJsonPath('calls.0.was_in', false);
+
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/leave")
+            ->assertOk();
+
+        $this->assertSame(Call::ENDED, Call::findOrFail($call['id'])->status);
+    }
+
+    public function test_a_call_ends_when_the_other_persons_tab_disappears(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $lin = $this->member($workspace, 'Lin');
+
+        $call = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->json('call');
+
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/join")
+            ->assertOk();
+
+        // Lin's browser died without a goodbye; Ada's is still checking in.
+        $this->travel(150)->seconds();
+        DB::table('call_participants')->where('user_id', $owner->id)->update(['last_seen_at' => now()]);
+
+        $this->artisan('smackchat:sweep-calls')->assertSuccessful();
+
+        $this->assertSame(Call::ENDED, Call::findOrFail($call['id'])->status);
+    }
+
     public function test_the_workspace_exposes_stun_and_credentialed_turn_servers(): void
     {
         [$owner, $workspace] = $this->office();
