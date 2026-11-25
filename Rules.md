@@ -34,6 +34,12 @@ SmackChat is Laravel 12 + Vue 3 + PrimeVue office chat: channels, DMs, threads, 
 - Reactions publish `message.reacted` and `actor_id`. Preserve the viewer's `mine` flag when the actor is someone else.
 - Live event name is `message` on `smackchat:ws:{workspaceId}:ch:{channelId}`. Missing Ably is a poll, not a bug.
 
+## Calls
+
+- A call with one person left is over. Do not bring back a `call.left` that leaves someone alone in a live call, and do not ring a person for a call they were in (`was_in`).
+- Play call sound from `CallAudio.vue`, not from a video tile. Keep the tiles muted.
+- The service worker must show a notification for every push on iPhone. Suppress a call push only when a window has focus, not when one is merely visible.
+
 ## Attendance, people, plans
 
 - Punches: `check_in`, `break_in`, `break_out`, `check_out`. Checkout posts hours into Timesheets.

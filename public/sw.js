@@ -1,5 +1,5 @@
 /* SmackChat service worker — cache static assets only; never cache Laravel HTML/API (CSRF-safe). */
-const CACHE = 'smack-static-v11';
+const CACHE = 'smack-static-v12';
 const PRECACHE = [
     '/offline.html',
     '/favicon.png',
@@ -132,12 +132,6 @@ function notificationOptions(payload) {
     };
 }
 
-async function visibleWindow() {
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-
-    return windows.some((client) => client.visibilityState === 'visible');
-}
-
 async function appHasFocus() {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const live = new Set(windows.map((client) => client.id));
@@ -186,21 +180,27 @@ self.addEventListener('push', (event) => {
     const title = payload.title || 'SmackChat';
 
     // iPhone throws if it sees unsupported options such as renotify, and it
-    // drops the subscription when a push does not display a notification.
+    // drops the subscription when a push does not display a notification. So
+    // on iPhone every push shows something, even when the app is open; a
+    // push that stayed silent there is how calls stopped arriving at all.
+    const ios = /iPhone|iPad|iPod/i.test(self.navigator?.userAgent || '');
+    const icon = new URL(ICON, self.location.origin).href;
+
     event.waitUntil((async () => {
         if (payload.type === 'call-ended') {
             const wasRinging = await closeTagged(payload.tag);
 
-            if (await visibleWindow()) {
+            // Someone looking at the app saw the ring stop there.
+            if (!ios && await appHasFocus()) {
                 return;
             }
 
             // Replace the ring with a quiet "Missed call" so the phone does not
             // keep showing Answer for a call nobody can join any more.
-            if (wasRinging || !payload.answered) {
+            if (ios || wasRinging || !payload.answered) {
                 await show(title, {
                     body: payload.body || '',
-                    icon: new URL(ICON, self.location.origin).href,
+                    icon,
                     tag: payload.tag,
                     data: { url: payload.url || '/app', kind: 'call-ended' },
                     silent: true,
@@ -214,10 +214,10 @@ self.addEventListener('push', (event) => {
             // A push that sat in the queue past the ring window is a missed
             // call, not an incoming one.
             if (payload.expires_at && Date.now() > Number(payload.expires_at)) {
-                if (!(await visibleWindow())) {
+                if (ios || !(await appHasFocus())) {
                     await show('Missed call', {
                         body: payload.body || '',
-                        icon: new URL(ICON, self.location.origin).href,
+                        icon,
                         tag: payload.tag,
                         data: { url: (payload.url || '/app').replace(/[?&]call=\d+/, ''), kind: 'call-ended' },
                         silent: true,
@@ -227,16 +227,29 @@ self.addEventListener('push', (event) => {
                 return;
             }
 
-            // The open tab already shows the in-app ring; do not double-alert.
-            if (await visibleWindow()) {
-                return;
+            if (!ios) {
+                // The focused app already shows the full-screen ring. A window
+                // that is merely open behind another one does not count: the
+                // person is not looking at it, so the system must ring.
+                if (await appHasFocus()) {
+                    return;
+                }
+
+                // The open app already raised this ring through the system.
+                const ringing = await self.registration.getNotifications({ tag: payload.tag });
+
+                if (ringing.length) {
+                    return;
+                }
             }
+
+            await show(title, notificationOptions(payload));
+
+            return;
         }
 
         // The open tab already shows the island. A second system alert is the duplicate.
-        // iPhone drops the push subscription if a push never displays a notification.
-        const ios = /iPhone|iPad|iPod/i.test(self.navigator?.userAgent || '');
-        if (!ios && !payload.call_id && payload.type !== 'call-ended' && await appHasFocus()) {
+        if (!ios && await appHasFocus()) {
             return;
         }
 

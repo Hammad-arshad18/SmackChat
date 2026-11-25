@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { DEFAULT_RINGTONE, RINGTONES } from '@/lib/ringtone';
 
 const STORAGE_KEY = 'smack.preferences';
 
@@ -8,6 +9,10 @@ function readPreferences() {
     } catch {
         return {};
     }
+}
+
+function savedRingtone(value) {
+    return RINGTONES.some((tone) => tone.value === value) ? value : DEFAULT_RINGTONE;
 }
 
 function prefersDark() {
@@ -28,6 +33,7 @@ export const useUiStore = defineStore('ui', {
             preferences: {
                 messageSounds: Boolean(saved.messageSounds),
                 desktopNotifications: Boolean(saved.desktopNotifications),
+                ringtone: savedRingtone(saved.ringtone),
             },
         };
     },

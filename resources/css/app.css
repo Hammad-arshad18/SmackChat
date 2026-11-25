@@ -1955,6 +1955,17 @@ kbd {
     line-height: 1.4;
 }
 
+.switch-row.ringtone-row {
+    flex-wrap: wrap;
+}
+
+.switch-row > .ringtone-pick {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+}
+
 .select-person {
     display: flex;
     align-items: center;
@@ -9195,78 +9206,161 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 }
 
 .call-dock {
+    /* The dock paints with these, so the dark video stage and the themed
+       voice card share one set of rules. */
+    --call-bg: var(--surface);
+    --call-stage: var(--surface-2);
+    --call-tile: var(--surface-3);
+    --call-line: var(--line);
+    --call-ink: var(--ink);
+    --call-muted: var(--muted-strong);
+    --call-accent: var(--primary);
     position: fixed;
     right: 20px;
     bottom: 20px;
     z-index: 70;
-    width: min(390px, calc(100vw - 24px));
-    display: grid;
-    background: var(--surface);
-    border: 1px solid var(--line);
+    width: min(380px, calc(100vw - 24px));
+    display: flex;
+    flex-direction: column;
+    background: var(--call-bg);
+    color: var(--call-ink);
+    border: 1px solid var(--call-line);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lift);
     overflow: hidden;
 }
 
+/* Video, a shared screen, and full screen sit on a dark surface in both themes. */
+.call-dock.stage,
+.call-dock.expanded {
+    --call-bg: #10141b;
+    --call-stage: #07090d;
+    --call-tile: #171c25;
+    --call-line: #252c38;
+    --call-ink: #f4f6f8;
+    --call-muted: #a3adba;
+    --call-accent: color-mix(in srgb, var(--primary) 55%, #ffffff);
+}
+
+.call-dock.stage:not(.expanded):not(.minimized) {
+    width: min(560px, calc(100vw - 28px));
+    height: min(64vh, 520px);
+}
+
 .call-dock-head {
+    flex: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 12px 15px;
-    border-bottom: 1px solid var(--line);
+    padding: 10px 10px 10px 15px;
+    background: var(--call-bg);
+    border-bottom: 1px solid var(--call-line);
+}
+
+.call-dock.minimized .call-dock-head {
+    border-bottom: 0;
+}
+
+.call-dock-title {
+    min-width: 0;
 }
 
 .call-dock-head .card-kicker {
     margin: 0 0 2px;
 }
 
-.call-dock-head strong {
-    font-size: 0.92rem;
-    color: var(--ink);
+.call-dock.stage .card-kicker,
+.call-dock.expanded .card-kicker {
+    color: var(--call-muted);
 }
 
-.call-timer {
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    color: var(--muted-strong);
-    padding: 3px 8px;
+.call-dock-head strong {
+    display: block;
+    font-size: 0.92rem;
+    color: var(--call-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.call-dock-meta {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+/* PrimeVue adds its button colours after this file, so these need the extra
+   class to win on the dark stage. */
+.call-dock .call-dock-meta .p-button.p-button-text,
+.call-dock .call-dock-meta .p-button.p-button-text:not(:disabled):hover {
+    color: var(--call-muted);
+}
+
+.call-dock.stage .call-dock-meta .p-button.p-button-text:not(:disabled):hover,
+.call-dock.expanded .call-dock-meta .p-button.p-button-text:not(:disabled):hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.call-status {
+    margin-right: 6px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--call-accent);
+    white-space: nowrap;
+}
+
+.call-status.pulse {
+    animation: call-blink 1.4s ease-in-out infinite;
+}
+
+.call-status.timer {
+    padding: 3px 9px;
     border-radius: 999px;
-    background: var(--surface-2);
-    border: 1px solid var(--line);
+    border: 1px solid var(--call-line);
+    background: color-mix(in srgb, var(--call-ink) 7%, transparent);
+    color: var(--call-ink);
+    font-family: var(--mono);
+    font-weight: 500;
 }
 
 .call-stage {
+    position: relative;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
     gap: 8px;
     padding: 10px;
-    background: var(--surface-2);
+    background: var(--call-stage);
     max-height: 46vh;
     overflow: auto;
 }
 
-.call-stage.audio {
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+.call-dock.stage .call-stage,
+.call-dock.expanded .call-stage {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+}
+
+.call-dock.minimized .call-stage,
+.call-dock.minimized .call-plan-note {
+    display: none;
 }
 
 .call-tile {
     position: relative;
-    aspect-ratio: 4 / 3;
+    min-height: 132px;
     border-radius: 14px;
     overflow: hidden;
-    background: var(--surface-3);
+    background: var(--call-tile);
     display: grid;
     place-items: center;
-    border: 1px solid var(--line);
+    border: 1px solid var(--call-line);
 }
 
-.call-stage.audio .call-tile {
-    aspect-ratio: auto;
-    min-height: 132px;
-}
-
-.call-tile .call-video:not(.is-audio) {
+.call-tile .call-video {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -9285,23 +9379,68 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     background: #07090d;
 }
 
-.call-video.is-audio {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-    pointer-events: none;
-}
-
 .call-audio-avatar {
     display: grid;
     place-items: center;
 }
 
-.call-tile.share,
-.call-dock:not(.stage) .call-tile.pinned {
-    aspect-ratio: 16 / 9;
+/* Voices play from here; nothing to see. */
+.call-sinks {
+    display: none;
+}
+
+/* One person in focus, everyone else in a strip under them. */
+.call-stage.has-pin {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+    grid-auto-rows: 92px;
+    align-content: stretch;
+}
+
+.call-stage.has-pin .call-tile.pinned {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: 0;
+    border-radius: 16px;
     background: #07090d;
+}
+
+.call-dock:not(.stage):not(.expanded) .call-stage.has-pin .call-tile.pinned {
+    min-height: 180px;
+}
+
+.call-stage.has-pin .call-tile.film {
+    min-height: 0;
+    height: 92px;
+    border-radius: 12px;
+    cursor: pointer;
+}
+
+/* Two people: the other person fills the stage and you sit in the corner. */
+.call-dock.duo .call-stage.has-pin .call-tile.film {
+    position: absolute;
+    right: 18px;
+    bottom: 18px;
+    z-index: 3;
+    width: clamp(96px, 26%, 200px);
+    height: auto;
+    aspect-ratio: 4 / 3;
+    border-color: rgba(255, 255, 255, 0.24);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+
+.call-dock.expanded .call-stage {
+    padding: 20px;
+}
+
+.call-dock.expanded .call-stage:not(.has-pin):not(.outgoing) {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 320px));
+    justify-content: center;
+    align-content: center;
+}
+
+.call-dock.expanded .call-stage:not(.has-pin) .call-tile {
+    aspect-ratio: 4 / 3;
 }
 
 .call-pin {
@@ -9320,15 +9459,8 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     cursor: pointer;
 }
 
-.call-pin.active,
-.call-tile.pinned .call-pin {
+.call-pin.active {
     background: var(--primary);
-}
-
-.call-tile-name em {
-    font-style: normal;
-    font-weight: 700;
-    color: #ffe08a;
 }
 
 .call-tile-name {
@@ -9350,30 +9482,104 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     text-overflow: ellipsis;
 }
 
+.call-tile-name em {
+    font-style: normal;
+    font-weight: 700;
+    color: #ffe08a;
+}
+
 .call-muted {
     font-size: 0.62rem;
     color: #ffb4a0;
 }
 
-.call-connecting {
-    grid-column: 1 / -1;
-    margin: 4px 0;
+.call-stage-note {
+    position: absolute;
+    left: 50%;
+    top: 10px;
+    z-index: 4;
+    max-width: calc(100% - 20px);
+    margin: 0;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: rgba(10, 12, 16, 0.74);
+    color: #fff;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transform: translateX(-50%);
+}
+
+.call-stage.outgoing {
+    grid-template-columns: 1fr;
+    place-items: center;
+    min-height: 190px;
+}
+
+.call-outgoing {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 6px;
+    padding: 22px 12px;
     text-align: center;
-    color: var(--muted);
+}
+
+.call-outgoing strong {
+    font-size: 1.05rem;
+    color: var(--call-ink);
+}
+
+.call-outgoing small {
+    color: var(--call-muted);
     font-size: 0.74rem;
 }
 
-.call-controls {
+.call-outgoing-pulse {
+    width: 66px;
+    height: 66px;
+    display: grid;
+    place-items: center;
+    margin-bottom: 8px;
+    border-radius: 50%;
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-size: 1.35rem;
+    animation: call-pulse 1.7s ease-out infinite;
+}
+
+.call-sound {
+    flex: none;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
+    padding: 10px 14px;
+    border: 0;
+    background: var(--primary);
+    color: #ffffff;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.call-sound:hover {
+    filter: brightness(1.08);
+}
+
+.call-controls {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
     padding: 12px;
-    border-top: 1px solid var(--line);
+    background: var(--call-bg);
+    border-top: 1px solid var(--call-line);
 }
 
 .call-off {
-    opacity: 0.8;
     position: relative;
 }
 
@@ -9394,191 +9600,22 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 }
 
 .call-plan-note {
+    flex: none;
     display: block;
     padding: 0 12px 10px;
+    background: var(--call-bg);
     text-align: center;
-    color: var(--muted);
+    color: var(--call-muted);
     font-size: 0.64rem;
 }
 
-.call-ring {
-    position: fixed;
-    inset: 0;
-    z-index: 90;
-    display: grid;
-    place-items: center;
-    padding: 20px;
-    background: rgba(10, 12, 16, 0.44);
-    backdrop-filter: blur(3px);
-}
-
-.call-ring-card {
-    width: min(430px, 100%);
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 14px;
-    align-items: center;
-    padding: 20px;
-    background: var(--surface);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lift);
-    border: 1px solid var(--line);
-}
-
-.call-ring-card small {
-    display: block;
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.72rem;
-}
-
-.call-ring-icon {
-    width: 48px;
-    height: 48px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    background: var(--primary-soft);
-    color: var(--primary);
-    font-size: 1.1rem;
-    animation: call-pulse 1.7s ease-out infinite;
-}
-
-.call-ring-actions {
-    grid-column: 1 / -1;
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-}
-
-.realtime-key-field {
-    margin-top: 14px;
-}
-
-@keyframes call-pulse {
-    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 42%, transparent); }
-    70% { box-shadow: 0 0 0 14px transparent; }
-    100% { box-shadow: 0 0 0 0 transparent; }
-}
-
-@media (max-width: 640px) {
-    .call-dock {
-        right: 8px;
-        left: 8px;
-        bottom: 8px;
-        width: auto;
-    }
-
-    .call-stage {
-        max-height: 40vh;
-    }
-
-    .call-controls {
-        flex-wrap: wrap;
-    }
-}
-
-/* Full-screen call stage and a proper ringing screen */
-.call-dock-meta {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.call-dock-title {
-    min-width: 0;
-}
-
-.call-dock-title strong {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.call-ringing {
-    color: var(--primary);
-    font-size: 0.72rem;
-    font-weight: 600;
-    animation: call-blink 1.4s ease-in-out infinite;
-}
-
-.call-dock.stage:not(.expanded) {
-    width: min(920px, calc(100vw - 28px));
-    height: min(78vh, 740px);
-    right: 14px;
-    bottom: 14px;
-    display: flex;
-    flex-direction: column;
-    background: #10141b;
-    border-color: #232a35;
-}
-
-.call-dock.stage .call-dock-head,
-.call-dock.stage .call-controls {
-    background: #10141b;
-    border-color: #232a35;
-}
-
-.call-dock.stage .call-dock-head strong,
-.call-dock.stage .card-kicker,
-.call-dock.stage .call-plan-note,
-.call-dock.stage .call-timer,
-.call-dock.stage .call-outgoing strong {
-    color: #f4f6f8;
-}
-
-.call-dock.stage .call-stage {
-    flex: 1;
-    min-height: 0;
-    max-height: none;
-    background: #07090d;
-}
-
-.call-dock.stage .call-stage.has-pin {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-    grid-template-rows: minmax(0, 1fr) auto;
-    gap: 8px;
-    padding: 8px;
-    align-content: stretch;
-}
-
-.call-dock.stage .call-tile.pinned {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    aspect-ratio: auto;
-    min-height: 0;
-    height: 100%;
-    border-radius: 16px;
-    background: #07090d;
-}
-
-.call-dock.stage .call-tile.film {
-    height: 96px;
-    aspect-ratio: auto;
-    border-radius: 12px;
-}
-
 .call-dock.expanded {
-    position: fixed;
     inset: 0;
-    right: 0;
-    bottom: 0;
     width: auto;
     height: auto;
     border-radius: 0;
     border: 0;
     z-index: 120;
-    display: flex;
-    flex-direction: column;
-}
-
-.call-dock.expanded .call-stage {
-    flex: 1;
-    max-height: none;
-    align-content: center;
-    padding: 20px;
 }
 
 .call-dock.expanded .call-controls {
@@ -9591,96 +9628,102 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     height: 100%;
     border-radius: 0;
     border: 0;
-    display: flex;
-    flex-direction: column;
 }
 
-.call-dock:fullscreen .call-stage {
-    flex: 1;
-    max-height: none;
-    align-content: center;
-    padding: 20px;
-}
-
-.call-dock.expanded .call-video,
-.call-dock:fullscreen .call-video {
-    max-height: 100%;
-}
-
-.call-stage.outgoing {
-    grid-template-columns: 1fr;
-    align-content: center;
-}
-
-.call-outgoing {
-    display: grid;
-    justify-items: center;
-    gap: 6px;
-    padding: 26px 12px;
-    text-align: center;
-}
-
-.call-outgoing strong {
-    font-size: 1.05rem;
-    color: var(--ink);
-}
-
-.call-outgoing small {
-    color: var(--muted);
-    font-size: 0.74rem;
-}
-
-.call-outgoing-pulse {
-    width: 66px;
-    height: 66px;
-    display: grid;
-    place-items: center;
-    margin-bottom: 8px;
-    border-radius: 50%;
-    background: var(--primary-soft);
-    color: var(--primary);
-    font-size: 1.35rem;
-    animation: call-pulse 1.7s ease-out infinite;
-}
-
+/* Incoming call. On a phone it is the whole screen, laid out like the
+   phone's own call screen. On a wider screen it is a banner in the corner,
+   so the work underneath stays usable while it rings. */
 .call-ring {
-    background:
-        radial-gradient(circle at 50% 22%, color-mix(in srgb, var(--primary) 18%, transparent), transparent 46%),
-        radial-gradient(circle at 50% 80%, color-mix(in srgb, var(--citrus) 14%, transparent), transparent 52%),
-        rgba(10, 12, 16, 0.52);
+    --ring-ink: #f6f4ee;
+    --ring-muted: rgba(246, 244, 238, 0.66);
+    --ring-accept: #25c15c;
+    --ring-decline: #f0453a;
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 130;
+    width: min(400px, calc(100vw - 24px));
+    color: var(--ring-ink);
+    animation: call-ring-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }
 
-.call-ring-stage {
-    width: min(470px, 100%);
+.call-ring-card {
     display: grid;
-    justify-items: center;
-    gap: 8px;
-    padding: 30px 20px;
-    text-align: center;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lift);
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "avatar who actions";
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: rgba(24, 25, 28, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 22px;
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.38), 0 2px 8px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(22px) saturate(1.3);
 }
 
-.call-ring-stage .card-kicker {
+.call-ring-who {
+    grid-area: who;
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.call-ring-app {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     margin: 0;
+    color: var(--ring-muted);
+    font-size: 0.68rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.call-ring-app i {
+    font-size: 0.66rem;
+}
+
+.call-ring-who h2 {
+    margin: 0;
+    overflow: hidden;
+    color: var(--ring-ink);
+    font-size: 1.02rem;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.call-ring-sub {
+    margin: 0;
+    overflow: hidden;
+    color: var(--ring-muted);
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .call-ring-avatar {
+    grid-area: avatar;
     position: relative;
-    width: 128px;
-    height: 128px;
     display: grid;
     place-items: center;
-    margin: 16px 0 8px;
+    width: 52px;
+    height: 52px;
+}
+
+.call-ring-avatar .p-avatar {
+    width: 52px;
+    height: 52px;
+    font-size: 1.3rem;
 }
 
 .call-ring-wave {
     position: absolute;
-    inset: -8px;
+    inset: -4px;
+    border: 2px solid color-mix(in srgb, var(--ring-accept) 60%, transparent);
     border-radius: 50%;
-    border: 2px solid color-mix(in srgb, var(--primary) 42%, transparent);
     animation: call-wave 2.1s ease-out infinite;
     pointer-events: none;
 }
@@ -9689,36 +9732,105 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
     animation-delay: 1.05s;
 }
 
-.call-ring-stage h2 {
-    margin: 0;
-    font-size: 1.7rem;
-    letter-spacing: -0.035em;
-    color: var(--ink);
-}
-
-.call-ring-sub {
-    margin: 0;
-    color: var(--muted-strong);
-    font-size: 0.82rem;
-}
-
-.call-ring-hint {
-    margin: 4px 0 0;
-    color: var(--muted);
-    font-size: 0.72rem;
-}
-
 .call-ring-actions {
+    grid-area: actions;
     display: flex;
-    justify-content: center;
-    gap: 14px;
-    margin-top: 18px;
+    align-items: center;
+    gap: 10px;
 }
 
-.call-ring-decline,
-.call-ring-accept {
-    min-width: 118px;
-    justify-content: center;
+.call-ring-btn {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 0;
+    color: var(--ring-ink);
+    font: inherit;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.call-ring-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.call-ring-icon {
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    color: #fff;
+    font-size: 1.05rem;
+    border-radius: 50%;
+    transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.call-ring-btn:not(:disabled):hover .call-ring-icon {
+    filter: brightness(1.08);
+    transform: scale(1.06);
+}
+
+.call-ring-btn:focus-visible {
+    outline: none;
+}
+
+.call-ring-btn:focus-visible .call-ring-icon {
+    outline: 2px solid #fff;
+    outline-offset: 3px;
+}
+
+.call-ring-btn.decline .call-ring-icon {
+    background: var(--ring-decline);
+}
+
+/* The handset lies down on the button that hangs up. */
+.call-ring-btn.decline .pi-phone {
+    transform: rotate(135deg);
+}
+
+.call-ring-btn.accept .call-ring-icon {
+    background: var(--ring-accept);
+    animation: call-ring-beat 1.5s ease-out infinite;
+}
+
+/* The corner banner has no room for words under the buttons; each button
+   still carries its name for a screen reader. */
+.call-ring-btn em {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+@keyframes call-ring-in {
+    from {
+        opacity: 0;
+        transform: translateY(-14px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes call-ring-beat {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring-accept) 60%, transparent); }
+    70% { box-shadow: 0 0 0 16px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.realtime-key-field {
+    margin-top: 14px;
+}
+
+@keyframes call-pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 42%, transparent); }
+    70% { box-shadow: 0 0 0 14px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 @keyframes call-wave {
@@ -9743,56 +9855,98 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 }
 
 @media (max-width: 640px) {
-    .call-dock.expanded,
-    .call-dock:fullscreen {
-        padding-bottom: env(safe-area-inset-bottom, 0);
+    .call-ring {
+        inset: 0;
+        width: auto;
+        background:
+            radial-gradient(120% 60% at 50% 0%, #2d6a5c 0%, transparent 70%),
+            radial-gradient(90% 50% at 50% 100%, #173a4d 0%, transparent 75%),
+            #101315;
+        animation: call-ring-fade 0.22s ease-out;
     }
 
-    .call-dock.expanded .call-stage,
-    .call-dock:fullscreen .call-stage {
-        grid-template-columns: 1fr;
-        padding: 12px;
+    .call-ring-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0;
+        height: 100%;
+        padding:
+            calc(env(safe-area-inset-top, 0px) + 64px)
+            28px
+            calc(env(safe-area-inset-bottom, 0px) + 44px);
+        text-align: center;
+        background: none;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        backdrop-filter: none;
     }
 
-    .call-ring-stage {
-        padding: 24px 16px;
-        border-radius: var(--radius-lg);
-    }
-
-    .call-ring-stage h2 {
-        font-size: 1.4rem;
-    }
-
-    .call-ring-actions {
+    .call-ring-who {
+        justify-items: center;
+        gap: 8px;
         width: 100%;
     }
 
-    .call-ring-decline,
-    .call-ring-accept {
-        flex: 1;
-        min-width: 0;
+    .call-ring-app {
+        font-size: 0.72rem;
+    }
+
+    .call-ring-who h2 {
+        max-width: 100%;
+        font-size: 2rem;
+        font-weight: 650;
+        letter-spacing: -0.03em;
+    }
+
+    .call-ring-sub {
+        font-size: 1rem;
+    }
+
+    .call-ring-avatar {
+        width: 148px;
+        height: 148px;
+        margin: auto 0;
+    }
+
+    .call-ring-avatar .p-avatar {
+        width: 148px;
+        height: 148px;
+        font-size: 3.4rem;
+    }
+
+    .call-ring-wave {
+        inset: -10px;
+    }
+
+    .call-ring-actions {
+        justify-content: space-between;
+        width: min(100%, 300px);
+        gap: 0;
+    }
+
+    .call-ring-icon {
+        width: 72px;
+        height: 72px;
+        font-size: 1.6rem;
+    }
+
+    .call-ring-btn em {
+        position: static;
+        width: auto;
+        height: auto;
+        overflow: visible;
+        clip-path: none;
+        color: var(--ring-muted);
+        font-size: 0.82rem;
+        font-style: normal;
     }
 }
 
-.call-sound {
-    grid-column: 1 / -1;
-    justify-self: center;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 13px;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--ink);
-    font-size: 0.74rem;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.call-sound:hover {
-    border-color: var(--primary);
-    color: var(--primary);
+@keyframes call-ring-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 /* --------------------------------------------------------------------------
@@ -9822,59 +9976,68 @@ html:not(.app-dark) .hero-shift-card .shift-actions .p-button.p-button-outlined 
 }
 
 /* Keep the chat's composer above a docked call on a phone. CallDock.vue sets
-   --call-dock-h to its own height while a call is open. */
+   --call-dock-h to its own height while a call is open. A video stage is too
+   tall for that, so it covers the composer until it is minimized. */
 @media (max-width: 640px) {
-    body:has(.call-dock:not(.expanded):not(.stage)) .composer-dock {
+    body:has(.call-dock:not(.expanded):not(.stage)) .composer-dock,
+    body:has(.call-dock.minimized) .composer-dock {
         padding-bottom: calc(var(--call-dock-h, 0px) + 16px + env(safe-area-inset-bottom));
     }
 
     .call-dock,
-    .call-dock.stage:not(.expanded) {
+    .call-dock.stage:not(.expanded):not(.minimized) {
         left: calc(8px + env(safe-area-inset-left));
         right: calc(8px + env(safe-area-inset-right));
         bottom: calc(8px + env(safe-area-inset-bottom));
         width: auto;
     }
 
-    .call-dock.stage:not(.expanded) {
-        height: auto;
-        max-height: min(70dvh, 560px);
+    .call-dock.stage:not(.expanded):not(.minimized) {
+        height: min(62dvh, 520px);
     }
 
-    .call-dock.stage:not(.expanded) .call-stage {
-        min-height: 180px;
+    .call-stage {
+        max-height: 40vh;
     }
 
     .call-dock.expanded {
         padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
         padding-left: env(safe-area-inset-left);
         padding-right: env(safe-area-inset-right);
     }
 
-    /* Several people on a phone: one row of thumbnails that scrolls sideways
-       instead of rows that squeeze the pinned video to nothing. */
-    .call-dock.stage .call-stage.has-pin {
-        grid-template-columns: none;
-        grid-auto-flow: column;
-        grid-auto-columns: 112px;
-        overflow-x: auto;
-        overscroll-behavior-x: contain;
+    .call-dock.expanded .call-stage {
+        padding: 10px;
     }
 
-    .call-dock.stage .call-tile.film {
-        height: 84px;
+    .call-stage.has-pin {
+        grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+        grid-auto-rows: 76px;
     }
 
-    .call-sound {
-        padding: 12px 20px;
-        font-size: 0.9rem;
-        font-weight: 600;
-        box-shadow: var(--shadow-lift);
+    .call-stage.has-pin .call-tile.film {
+        height: 76px;
+    }
+
+    .call-dock.duo .call-stage.has-pin .call-tile.film {
+        right: 12px;
+        bottom: 12px;
+        height: auto;
+    }
+
+    .call-controls {
+        gap: 8px;
     }
 
     .call-controls .p-button {
         min-width: 48px;
         min-height: 48px;
+    }
+
+    .call-sound {
+        padding: 14px;
+        font-size: 0.9rem;
     }
 }
 

@@ -12,6 +12,7 @@ import {
     removeDownloadedLocalModel,
 } from '@/ai';
 import api, { errorText } from '@/api';
+import { RINGTONES, previewRingtone } from '@/lib/ringtone';
 import { disablePush, ensurePush } from '@/push';
 import { useAuthStore } from '@/stores/auth';
 import { useOfficeStore } from '@/stores/office';
@@ -388,6 +389,11 @@ async function applyStatus(preset) {
     await saveProfile();
 }
 
+function chooseRingtone(tone) {
+    ui.setPreference('ringtone', tone);
+    previewRingtone(tone);
+}
+
 async function setNotifications(enabled) {
     if (!enabled) {
         ui.setPreference('desktopNotifications', false);
@@ -595,6 +601,29 @@ async function deleteAccount() {
                 <div class="switch-row">
                     <div><strong>Message sounds</strong><small>A soft chime when a teammate messages you.</small></div>
                     <ToggleSwitch :model-value="ui.preferences.messageSounds" @update:model-value="ui.setPreference('messageSounds', $event)" />
+                </div>
+
+                <div class="switch-row ringtone-row">
+                    <div><strong>Ringtone</strong><small>What you hear when someone calls you. Pick one to listen.</small></div>
+                    <div class="ringtone-pick">
+                        <SelectButton
+                            :model-value="ui.preferences.ringtone"
+                            :options="RINGTONES"
+                            option-label="label"
+                            option-value="value"
+                            :allow-empty="false"
+                            aria-label="Ringtone"
+                            @update:model-value="chooseRingtone"
+                        />
+                        <Button
+                            icon="pi pi-play"
+                            text
+                            rounded
+                            aria-label="Play the ringtone"
+                            v-tooltip.top="'Play'"
+                            @click="previewRingtone(ui.preferences.ringtone)"
+                        />
+                    </div>
                 </div>
 
                 <div class="switch-row">
