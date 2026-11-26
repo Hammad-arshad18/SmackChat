@@ -7,10 +7,9 @@ use App\Models\Channel;
 use App\Models\Message;
 use App\Models\PushSubscription;
 use App\Models\User;
-use App\Support\OpaqueId;
+use App\Support\PushPayloads;
 use GuzzleHttp\Client;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Minishlink\WebPush\Subscription;
@@ -35,9 +34,7 @@ class WebPushNotifier
 
     public function notify(Channel $channel, User $author, Message $message, string $excerpt): void
     {
-        $recipientIds = $channel->isOpen()
-            ? DB::table('workspace_members')->where('workspace_id', $channel->workspace_id)->pluck('user_id')
-            : $channel->members()->pluck('users.id');
+        $recipientIds = PushPayloads::channelAudience($channel);
 
         if ($recipientIds === null || $recipientIds->isEmpty()) {
             return;
@@ -52,24 +49,7 @@ class WebPushNotifier
             return;
         }
 
-        $channel->loadMissing('workspace');
-        $parentId = $message->parent_id;
-        $label = $channel->type === Channel::DM ? 'Direct message' : $channel->name;
-        $title = $parentId ? 'Thread in '.$label : $label;
-        $body = trim($author->name.': '.($excerpt !== '' ? $excerpt : 'New message'));
-        $url = '/w/'.$channel->workspace->slug.'/c/'.$channel->slug;
-        $url .= $parentId
-            ? '?m='.OpaqueId::encode($parentId).'&reply='.OpaqueId::encode($message->id)
-            : '?m='.OpaqueId::encode($message->id);
-
-        $payload = json_encode([
-            'title' => $title,
-            'body' => $body,
-            'url' => $url,
-            'tag' => 'smack-m-'.$message->id,
-            'channel_id' => $channel->id,
-            'parent_id' => $parentId,
-        ], JSON_UNESCAPED_UNICODE);
+        $payload = json_encode(PushPayloads::message($channel, $author, $message, $excerpt), JSON_UNESCAPED_UNICODE);
 
         $this->deliver($subscriptions, $payload);
     }
@@ -94,28 +74,8 @@ class WebPushNotifier
             return;
         }
 
-        $channel = $call->channel;
-        $isDm = $channel->type === Channel::DM;
-        // The caller is the headline, the way a phone shows a call.
-        $title = $caller->name;
-        $body = $isDm
-            ? ($call->kind === Call::VIDEO ? 'Incoming video call' : 'Incoming voice call')
-            : 'Huddle in #'.$channel->name;
-        $startedAt = $call->started_at ?? now();
-        $ringFor = max(30, (int) config('smackchat.call_ring_seconds', 75));
-
-        $payload = json_encode([
-            'type' => 'call',
-            'title' => $title,
-            'body' => $body,
-            'url' => '/w/'.$channel->workspace->slug.'/c/'.$channel->slug.'?call='.$call->id,
-            'tag' => 'smack-call-'.$call->id,
-            'call_id' => $call->id,
-            'workspace' => $channel->workspace->slug,
-            'kind' => $call->kind,
-            'started_at' => $startedAt->getTimestampMs(),
-            'expires_at' => $startedAt->copy()->addSeconds($ringFor)->getTimestampMs(),
-        ], JSON_UNESCAPED_UNICODE);
+        $ringFor = PushPayloads::ringSeconds();
+        $payload = json_encode(PushPayloads::ring($call, $caller), JSON_UNESCAPED_UNICODE);
 
         // A ring is worthless a minute later. Keep it short-lived and give it a
         // topic so the "call ended" push replaces it if it is still queued.
@@ -133,25 +93,15 @@ class WebPushNotifier
     {
         // People who were in the call already know it ended. Only the ones
         // who were rung and never picked up still have a ringing notification.
-        $joined = $call->participants()->pluck('user_id')->push($call->started_by)->all();
+        $joined = PushPayloads::joinedUserIds($call);
         $subscriptions = $this->callSubscriptions($call, $joined);
 
         if ($subscriptions === null || $subscriptions->isEmpty()) {
             return;
         }
 
-        $answered = count(array_unique($joined)) > 1;
-        $caller = $call->starter?->name ?? 'Someone';
-
-        $payload = json_encode([
-            'type' => 'call-ended',
-            'title' => $answered ? 'Call ended' : 'Missed call',
-            'body' => $answered ? 'The call has ended.' : 'Missed call from '.$caller,
-            'url' => '/w/'.$call->channel->workspace->slug.'/c/'.$call->channel->slug,
-            'tag' => 'smack-call-'.$call->id,
-            'call_id' => $call->id,
-            'answered' => $answered,
-        ], JSON_UNESCAPED_UNICODE);
+        $answered = count($joined) > 1;
+        $payload = json_encode(PushPayloads::callEnded($call, $answered), JSON_UNESCAPED_UNICODE);
 
         $this->deliver($subscriptions, $payload, [
             'TTL' => 60 * 60,
@@ -175,9 +125,7 @@ class WebPushNotifier
             return null;
         }
 
-        $recipientIds = $channel->isOpen()
-            ? DB::table('workspace_members')->where('workspace_id', $channel->workspace_id)->pluck('user_id')
-            : $channel->members()->pluck('users.id');
+        $recipientIds = PushPayloads::channelAudience($channel);
 
         return PushSubscription::query()
             ->whereIn('user_id', $recipientIds)

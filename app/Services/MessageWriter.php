@@ -230,6 +230,12 @@ class MessageWriter
             } catch (Throwable $exception) {
                 report($exception);
             }
+
+            try {
+                app(NativePushNotifier::class)->notify($channel, $author, $message, $excerpt);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
         });
     }
 

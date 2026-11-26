@@ -39,4 +39,24 @@ return [
         'key' => env('ABLY_KEY'),
     ],
 
+    // Native app push. Each one is optional: without its keys that kind of
+    // push is skipped, the way a missing ABLY_KEY means polling.
+    'expo' => [
+        // Only needed when "enhanced push security" is on for the Expo project.
+        'access_token' => env('EXPO_ACCESS_TOKEN'),
+    ],
+
+    'apns' => [
+        'key_id' => env('APNS_KEY_ID'),
+        'team_id' => env('APNS_TEAM_ID'),
+        'key_path' => env('APNS_KEY_PATH'),
+        'bundle_id' => env('APNS_BUNDLE_ID'),
+        'production' => (bool) env('APNS_PRODUCTION', false),
+    ],
+
+    'fcm' => [
+        'project_id' => env('FCM_PROJECT_ID'),
+        'credentials_path' => env('FCM_CREDENTIALS_PATH'),
+    ],
+
 ];

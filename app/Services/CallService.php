@@ -22,6 +22,7 @@ class CallService
     public function __construct(
         private AblyPublisher $ably,
         private WebPushNotifier $push,
+        private NativePushNotifier $nativePush,
     ) {}
 
     public function limit(Workspace $workspace): int
@@ -70,9 +71,16 @@ class CallService
             // A closed tab cannot ring, but a push notification can bring the
             // callee back into the app. Never let that delay the call itself.
             $push = $this->push;
-            defer(function () use ($push, $call, $user): void {
+            $nativePush = $this->nativePush;
+            defer(function () use ($push, $nativePush, $call, $user): void {
                 try {
                     $push->ring($call, $user);
+                } catch (Throwable $exception) {
+                    report($exception);
+                }
+
+                try {
+                    $nativePush->ring($call, $user);
                 } catch (Throwable $exception) {
                     report($exception);
                 }
@@ -192,9 +200,16 @@ class CallService
 
         // Take the ring off phones whose app is closed.
         $push = $this->push;
-        defer(function () use ($push, $call): void {
+        $nativePush = $this->nativePush;
+        defer(function () use ($push, $nativePush, $call): void {
             try {
                 $push->cancelRing($call);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+
+            try {
+                $nativePush->cancelRing($call);
             } catch (Throwable $exception) {
                 report($exception);
             }
