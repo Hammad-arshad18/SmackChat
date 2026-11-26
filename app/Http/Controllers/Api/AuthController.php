@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Http\Controllers\Api\Concerns\SignsPeopleIn;
 use App\Mail\RegistrationCodeMail;
 use App\Models\AttendanceDay;
 use App\Models\Message;
@@ -13,19 +14,21 @@ use App\Services\AuditLogger;
 use App\Services\WorkspaceProvisioner;
 use App\Support\OpaqueId;
 use Illuminate\Auth\Events\PasswordReset;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password as PasswordBroker;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 
 class AuthController extends ApiController
 {
+    use SignsPeopleIn;
+
     public function register(Request $request)
     {
         $data = $request->validate([
@@ -64,51 +67,13 @@ class AuthController extends ApiController
 
     public function verifyRegistration(Request $request, WorkspaceProvisioner $provisioner)
     {
-        $data = $request->validate([
-            'email' => ['required', 'email'],
-            'code' => ['required', 'string', 'size:6', 'regex:/^[0-9]{6}$/'],
-        ]);
+        $result = $this->completeRegistration($request, $provisioner);
 
-        $email = strtolower($data['email']);
-        $challenge = RegistrationChallenge::query()->where('email', $email)->latest('id')->first();
-
-        if (! $challenge) {
-            return response()->json(['message' => 'Start a new workspace registration first.'], 422);
+        if ($result instanceof JsonResponse) {
+            return $result;
         }
 
-        if ($challenge->isExpired()) {
-            return response()->json(['message' => 'That code expired. Request a fresh one.'], 410);
-        }
-
-        if ($challenge->attempts >= 5) {
-            return response()->json(['message' => 'Too many attempts. Request a fresh code.'], 429);
-        }
-
-        if (! Hash::check($data['code'], $challenge->code_hash)) {
-            $challenge->increment('attempts');
-            $remaining = max(0, 5 - $challenge->attempts);
-
-            return response()->json([
-                'message' => 'That code does not match.'.($remaining ? ' You have '.$remaining.' more attempts.' : ' Request a fresh code.'),
-            ], 422);
-        }
-
-        if (User::query()->whereRaw('lower(email) = ?', [$email])->exists()) {
-            $challenge->delete();
-
-            return response()->json(['message' => 'That email is already registered. Log in instead.'], 422);
-        }
-
-        $user = User::query()->create([
-            'name' => $challenge->name,
-            'email' => $email,
-            'password' => $challenge->getRawOriginal('password'),
-            'timezone' => $challenge->timezone,
-            'avatar_color' => User::colorFor($email),
-        ]);
-
-        $workspace = $provisioner->create($user, $challenge->workspace_name, $challenge->timezone);
-        $challenge->delete();
+        [$user, $workspace] = $result;
         $this->establishSession($request, $user);
 
         return response()->json([
@@ -157,31 +122,12 @@ class AuthController extends ApiController
 
     public function login(Request $request)
     {
-        $data = $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required', 'string'],
-        ]);
+        $user = $this->checkCredentials($request);
 
-        $email = strtolower($data['email']);
-        $throttleKey = 'login|'.$email.'|'.$request->ip();
-
-        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
-            return response()->json([
-                'message' => 'Too many attempts. Try again in '.RateLimiter::availableIn($throttleKey).' seconds.',
-            ], 429);
+        if ($user instanceof JsonResponse) {
+            return $user;
         }
 
-        $user = User::query()->whereRaw('lower(email) = ?', [$email])->first();
-
-        if (! $user || ! Hash::check($data['password'], $user->password)) {
-            // Count failures per email + IP so one noisy client cannot lock an
-            // entire office out, and a distributed attacker still hits a wall.
-            RateLimiter::hit($throttleKey, 300);
-
-            return response()->json(['message' => 'Those credentials do not match an account.'], 422);
-        }
-
-        RateLimiter::clear($throttleKey);
         $this->establishSession($request, $user);
 
         return response()->json([
@@ -251,6 +197,8 @@ class AuthController extends ApiController
 
     public function logout(Request $request)
     {
+        // A phone signs out with its bearer token; take that token with it.
+        $this->revokeBearerToken($request);
         Auth::guard('web')->logout();
 
         if ($request->hasSession()) {
@@ -478,7 +426,7 @@ class AuthController extends ApiController
         return $subject->workspaces()->whereIn('workspaces.id', $workspaceIds)->exists();
     }
 
-    private function establishSession(Request $request, User $user): void
+    protected function establishSession(Request $request, User $user): void
     {
         $user->forceFill(['last_seen_at' => now()])->saveQuietly();
 

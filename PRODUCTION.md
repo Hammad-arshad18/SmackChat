@@ -54,10 +54,32 @@ business decisions that cannot live in the repository. Work top to bottom.
   `APP_KEY` and never returned by the API. Keep `APP_KEY` backed up or that key
   becomes unreadable.
 
+- **Mobile app push** — the native app signs in at `/api/mobile/*` for a
+  bearer token and registers its push tokens at `PUT /api/push/native`.
+  Message alerts go through Expo and work without keys; set
+  `EXPO_ACCESS_TOKEN` only if the Expo project has enhanced push security on.
+  A call can only ring a phone whose app is closed through the platform's own
+  call push, so both of these are needed for that:
+  - iOS (PushKit VoIP → CallKit): an APNs auth key (.p8) from the Apple
+    developer account. Set `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_KEY_PATH`
+    (path to the .p8 on the server, outside `public/`), `APNS_BUNDLE_ID`
+    (the app's bundle id; `.voip` is added), and `APNS_PRODUCTION=true` for
+    App Store/TestFlight builds (`false` for development builds).
+  - Android (full-screen call notification): a Firebase project and a service
+    account key JSON with the Firebase Cloud Messaging role. Set
+    `FCM_PROJECT_ID` and `FCM_CREDENTIALS_PATH` (path to the JSON, outside
+    `public/`).
+  Without them the app still gets an ordinary Expo notification for a call,
+  but nothing rings. The server needs outbound HTTPS (and HTTP/2 for APNs, so
+  PHP's curl must be built with HTTP/2) to `exp.host`, `api.push.apple.com`,
+  `oauth2.googleapis.com` and `fcm.googleapis.com`. Run the migrations; they
+  add `device_push_tokens`.
+
 ## Compliance
 
 - Publish a privacy policy and a DPA. Messages are end-to-end encrypted, but
-  attachments, profiles, attendance GPS/IP, and push endpoints are personal
+  attachments, profiles, attendance GPS/IP, and push endpoints and device push
+  tokens are personal
   data stored on the server.
 - Decide attendance retention (`SMACKCHAT_ATTENDANCE_RETENTION_DAYS`, `0` keeps
   forever) and audit retention (`SMACKCHAT_AUDIT_RETENTION_DAYS`).

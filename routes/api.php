@@ -11,6 +11,8 @@ use App\Http\Controllers\Api\E2eController;
 use App\Http\Controllers\Api\InvitationController;
 use App\Http\Controllers\Api\MemberController;
 use App\Http\Controllers\Api\MessageController;
+use App\Http\Controllers\Api\MobileAuthController;
+use App\Http\Controllers\Api\NativePushController;
 use App\Http\Controllers\Api\PushController;
 use App\Http\Controllers\Api\RealtimeController;
 use App\Http\Controllers\Api\RealtimeSettingsController;
@@ -27,8 +29,15 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middle
 Route::get('/invitations/{token}', [InvitationController::class, 'show']);
 Route::post('/invitations/{token}/accept', [InvitationController::class, 'accept']);
 
+// Native app: same checks as the routes above, but a bearer token instead of
+// a cookie session. Registration starts at /register like the browser.
+Route::post('/mobile/login', [MobileAuthController::class, 'login'])->middleware('throttle:login');
+Route::post('/mobile/register/verify', [MobileAuthController::class, 'verifyRegistration'])->middleware('throttle:12,1');
+Route::post('/mobile/invitations/{token}/accept', [MobileAuthController::class, 'acceptInvitation']);
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::post('/mobile/logout', [MobileAuthController::class, 'logout']);
     Route::post('/e2e/devices', [E2eController::class, 'device'])->middleware('throttle:presence');
     Route::get('/e2e/vault', [E2eController::class, 'showVault']);
     Route::put('/e2e/vault', [E2eController::class, 'updateVault'])->middleware('throttle:presence');
@@ -47,6 +56,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/push/subscription', [PushController::class, 'store']);
     Route::delete('/push/subscription', [PushController::class, 'destroy']);
     Route::post('/push/test', [PushController::class, 'test'])->middleware('throttle:presence');
+    Route::put('/push/native', [NativePushController::class, 'store'])->middleware('throttle:presence');
+    Route::delete('/push/native', [NativePushController::class, 'destroy']);
     Route::get('/attachments/{attachment}', [AttachmentController::class, 'show'])->middleware('throttle:attachments');
 
     Route::get('/workspaces', [WorkspaceController::class, 'index']);

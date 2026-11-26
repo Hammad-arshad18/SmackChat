@@ -60,6 +60,20 @@ Shell and nav: `Shell.vue`, `WorkspaceNav.vue`. Router: `resources/js/router.js`
 - Push text for a user message is `New message`.
 - Attachments are files the server can read. They are not end to end.
 
+## Mobile app (bearer tokens and native push)
+
+The React Native (Expo) app has no cookies. It signs in for a Sanctum bearer token (`Authorization: Bearer <token>`), which every `auth:sanctum` route accepts.
+
+- `POST /api/mobile/login` (`email`, `password`, `device_name`) → `{user, token}`. Same lockout as `/api/login` (email + IP, 5 tries, 300 s), and the two share the counter.
+- Registration starts at `POST /api/register` as in the browser, then `POST /api/mobile/register/verify` (`email`, `code`, `device_name`) → 201 `{user, token, workspace_slug}`.
+- `POST /api/mobile/invitations/{token}/accept`: a new person sends `name`, `password`, `password_confirmation`, `device_name` → `{user, token, workspace_slug}`. Someone already signed in sends their bearer token instead and gets `token: null`.
+- `POST /api/mobile/logout` deletes the current token and the push tokens registered under it. `/api/logout` also revokes a bearer token when one is sent. A password reset revokes every token.
+- Tokens are named `mobile:<device_name>`. The checks live in `Api/Concerns/SignsPeopleIn`, shared with `AuthController` and `InvitationController`; change them there, not in one controller.
+- `PUT /api/push/native` (`platform` ios|android, `kind` expo|voip|fcm, `token`) and `DELETE /api/push/native` (`token`) keep `device_push_tokens`. `voip` is iOS only, `fcm` Android only.
+- `NativePushNotifier` runs next to `WebPushNotifier` in the same `defer()`s, with the same payloads (`App\Support\PushPayloads`). Messages go through Expo. Rings go to iOS as an APNs VoIP push and to Android as a high-priority FCM data message, so the phone rings while the app is closed; a person with only an Expo token gets an Expo notification instead. `cancelRing` sends `type: call-ended` the same ways, plus a "Missed call" Expo notification.
+- A VoIP push must be reported to CallKit. The app ends the matching call on `call-ended`, or reports one and ends it at once if none is showing.
+- A missing APNs or FCM key skips that push, like a missing `ABLY_KEY`. Dead tokens (Expo `DeviceNotRegistered`, APNs 410/`BadDeviceToken`, FCM `UNREGISTERED`) are deleted.
+
 ## Attendance
 
 Punch actions: `check_in`, `break_in`, `break_out`, `check_out`. Checkout writes the day's hours into Timesheets. Schedule defaults: Mon–Fri, 09:00–17:00, workspace timezone. Holidays can repeat yearly. Logic: `AttendanceService`, `AttendanceCalculator`, `ScheduleInspector`.
@@ -79,11 +93,12 @@ Punch actions: `check_in`, `break_in`, `break_out`, `check_out`. Checkout writes
 | Attendance | `AttendanceController`, `AttendanceService` |
 | Schedule | `ScheduleController` |
 | Billing | `BillingController`, `config/smackchat.php` |
-| Push | `PushController`, `resources/js/push.js` |
+| Push | `PushController`, `resources/js/push.js`, `PushPayloads` |
+| Mobile | `MobileAuthController`, `Concerns/SignsPeopleIn`, `NativePushController`, `NativePushNotifier` |
 | Live | `office.js`, `realtime.js`, `AblyPublisher` |
 | On-device AI | `resources/js/ai.js`, `resources/js/agent.js`, `resources/js/workers/ai.worker.js` |
 | Chat UI | `ChannelView.vue`, `Composer.vue`, `resources/css/app.css` |
-| Tests | `tests/Feature/OfficeChatTest.php`, `tests/Unit/*` |
+| Tests | `tests/Feature/OfficeChatTest.php`, `MobileAuthTest`, `NativePushTest`, `tests/Unit/*` |
 
 ## Run
 
