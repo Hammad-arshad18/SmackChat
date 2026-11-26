@@ -4,6 +4,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::view('/login', 'app')->name('login');
 
+Route::view('/privacy', 'privacy')->name('privacy');
+
 Route::get('/robots.txt', function () {
     $sitemap = rtrim(config('app.url'), '/').'/sitemap.xml';
 
@@ -11,6 +13,7 @@ Route::get('/robots.txt', function () {
         'User-agent: *',
         'Allow: /',
         'Allow: /login',
+        'Allow: /privacy',
         'Disallow: /app',
         'Disallow: /w/',
         'Disallow: /api/',
@@ -31,6 +34,7 @@ Route::get('/sitemap.xml', function () {
     $urls = [
         ['loc' => $base.'/', 'changefreq' => 'weekly', 'priority' => '1.0'],
         ['loc' => $base.'/login', 'changefreq' => 'monthly', 'priority' => '0.8'],
+        ['loc' => $base.'/privacy', 'changefreq' => 'yearly', 'priority' => '0.3'],
     ];
 
     $body = '<?xml version="1.0" encoding="UTF-8"?>'

@@ -15,6 +15,9 @@ return [
 
     'name' => env('APP_NAME', 'Laravel'),
 
+    // Shown on the public privacy policy page (/privacy).
+    'support_email' => env('SUPPORT_EMAIL'),
+
     /*
     |--------------------------------------------------------------------------
     | Application Environment
