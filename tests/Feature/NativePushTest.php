@@ -387,6 +387,51 @@ class NativePushTest extends TestCase
 
     // ------------------------------------------------------------- helpers
 
+    public function test_a_test_push_reaches_the_phone_and_reports_what_happened(): void
+    {
+        $grace = User::factory()->create();
+        $client = $this->fakeClient();
+        $this->configureProviders();
+        $this->register($grace, 'android', 'fcm', 'fcm:grace');
+        $this->register($grace, 'android', 'fcm', 'fcm:old-phone');
+        $client->dead[] = 'fcm:old-phone';
+
+        $response = $this->actingAs($grace, 'sanctum')->postJson('/api/push/native/test')->assertOk();
+
+        $response->assertJsonPath('fcm.configured', true);
+        $devices = collect($response->json('devices'));
+        $this->assertTrue($devices->contains(fn ($d) => $d['kind'] === 'fcm' && $d['ok'] === true && $d['error'] === null));
+        $this->assertTrue($devices->contains(fn ($d) => $d['kind'] === 'fcm' && $d['ok'] === false && $d['error'] === 'UNREGISTERED'));
+
+        $fcm = $client->to('fcm.googleapis.com');
+        $this->assertCount(2, $fcm);
+        $data = json_decode($fcm[0]['body'], true)['message']['data'];
+        $this->assertSame('SmackChat', $data['title']);
+        $this->assertSame('messages', $data['channelId']);
+        $this->assertSame(1, DevicePushToken::query()->where('user_id', $grace->id)->count());
+    }
+
+    public function test_a_test_push_says_when_the_server_has_no_fcm_key(): void
+    {
+        $grace = User::factory()->create();
+        $client = $this->fakeClient();
+        $this->register($grace, 'android', 'fcm', 'fcm:grace');
+
+        config(['services.fcm' => ['project_id' => 'smack-test', 'credentials_path' => 'storage/app/missing-key.json']]);
+        $this->actingAs($grace, 'sanctum')->postJson('/api/push/native/test')
+            ->assertOk()
+            ->assertJsonPath('fcm.configured', false)
+            ->assertJsonPath('fcm.problem', 'The FCM key file is missing or unreadable at FCM_CREDENTIALS_PATH.')
+            ->assertJsonPath('devices.0.ok', false)
+            ->assertJsonPath('devices.0.error', 'FCM is not set up on the server.');
+
+        config(['services.fcm' => ['project_id' => null, 'credentials_path' => null]]);
+        $this->actingAs($grace, 'sanctum')->postJson('/api/push/native/test')
+            ->assertJsonPath('fcm.problem', 'FCM_PROJECT_ID or FCM_CREDENTIALS_PATH is not set.');
+
+        $this->assertCount(0, $client->to('fcm.googleapis.com'));
+    }
+
     private function fakeClient(): object
     {
         $client = new class implements ClientInterface

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Call;
 use App\Models\Channel;
+use App\Services\CallIceServers;
 use App\Services\CallService;
 use App\Services\ChannelAccess;
 use Illuminate\Http\Request;
@@ -37,6 +38,7 @@ class CallController extends ApiController
         return response()->json([
             'call' => $calls->present($call, $request->user()),
             'created' => $created,
+            'ice_servers' => app(CallIceServers::class)->all(),
         ], 201);
     }
 
@@ -59,6 +61,7 @@ class CallController extends ApiController
 
         return response()->json([
             'call' => $calls->present($call, $request->user()),
+            'ice_servers' => app(CallIceServers::class)->all(),
         ]);
     }
 

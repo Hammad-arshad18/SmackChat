@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\DevicePushToken;
+use App\Services\NativePushNotifier;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -56,6 +57,12 @@ class NativePushController extends ApiController
         );
 
         return response()->json(['ok' => true]);
+    }
+
+    /** Send a test notice to this person's phones and report what happened. */
+    public function test(Request $request, NativePushNotifier $push)
+    {
+        return response()->json($push->test($request->user()));
     }
 
     public function destroy(Request $request)

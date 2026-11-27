@@ -46,6 +46,9 @@ class NativePushNotifier
 
     private ?ClientInterface $http = null;
 
+    /** Why the last FCM access token could not be had, for the test push. */
+    private ?string $fcmProblem = null;
+
     public function useClient(ClientInterface $client): void
     {
         $this->http = $client;
@@ -156,6 +159,56 @@ class NativePushNotifier
      * @param  array<int, int>  $exceptUserIds
      * @return Collection<int, DevicePushToken>|null
      */
+    /**
+     * Send a test notice to every phone this person signed in on, and say what
+     * happened to each: the one way to check push on a live server.
+     *
+     * @return array{fcm: array{configured: bool, problem: ?string}, devices: list<array{platform: string, kind: string, ok: ?bool, error: ?string}>}
+     */
+    public function test(User $user): array
+    {
+        $tokens = DevicePushToken::query()->where('user_id', $user->id)->get();
+        $payload = [
+            'type' => 'test',
+            'title' => 'SmackChat',
+            'body' => 'Push works on this phone.',
+            'tag' => 'smack-test',
+        ];
+
+        $fcmTokens = $tokens->where('kind', DevicePushToken::FCM);
+        $outcomes = $this->sendFcm($fcmTokens, $payload, 300, null, ['channelId' => self::CHANNEL_MESSAGES]);
+        $configured = $fcmTokens->isEmpty() ? $this->fcmAccessToken() !== null : $outcomes !== [];
+
+        $this->sendExpo($tokens->where('kind', DevicePushToken::EXPO), $payload, [
+            'sound' => 'default',
+            'priority' => 'high',
+            'channelId' => self::CHANNEL_MESSAGES,
+        ]);
+
+        return [
+            'fcm' => ['configured' => $configured, 'problem' => $configured ? null : $this->fcmProblem],
+            'devices' => $tokens->map(function (DevicePushToken $token) use ($outcomes, $configured) {
+                $outcome = $outcomes[$token->id] ?? null;
+
+                return [
+                    'platform' => $token->platform,
+                    'kind' => $token->kind,
+                    'ok' => match (true) {
+                        $token->kind !== DevicePushToken::FCM => null,
+                        $outcome !== null => $outcome['ok'],
+                        default => false,
+                    },
+                    'error' => match (true) {
+                        $token->kind !== DevicePushToken::FCM => null,
+                        ! $configured => 'FCM is not set up on the server.',
+                        $outcome === null || $outcome['ok'] => null,
+                        default => implode(', ', $outcome['codes']),
+                    },
+                ];
+            })->values()->all(),
+        ];
+    }
+
     private function callTokens(Call $call, array $exceptUserIds): ?Collection
     {
         $call->loadMissing(['channel.workspace']);
@@ -386,19 +439,20 @@ class NativePushNotifier
      * @param  Collection<int, DevicePushToken>  $tokens
      * @param  array<string, mixed>  $payload
      * @param  array{channelId?: string, categoryId?: string, silent?: bool}  $display
+     * @return array<int, array{ok: bool, status: ?int, codes: list<string>}> per token id; empty when nothing was sent
      */
-    private function sendFcm(Collection $tokens, array $payload, ?int $ttl, ?string $collapseKey, array $display = []): void
+    private function sendFcm(Collection $tokens, array $payload, ?int $ttl, ?string $collapseKey, array $display = []): array
     {
         if ($tokens->isEmpty()) {
-            return;
+            return [];
         }
 
         $accessToken = $this->fcmAccessToken();
 
         if ($accessToken === null) {
-            Log::debug('FCM push skipped: FCM is not configured.');
+            Log::warning('FCM push skipped.', ['reason' => $this->fcmProblem]);
 
-            return;
+            return [];
         }
 
         $url = 'https://fcm.googleapis.com/v1/projects/'.config('services.fcm.project_id').'/messages:send';
@@ -423,6 +477,8 @@ class NativePushNotifier
             'collapse_key' => $collapseKey,
         ], fn ($value) => $value !== null);
 
+        $outcomes = [];
+
         foreach ($tokens as $token) {
             $body = json_encode(['message' => [
                 'token' => $token->token,
@@ -435,14 +491,23 @@ class NativePushNotifier
                 'Content-Type' => 'application/json',
             ], $body));
 
-            if (! $response || $response->getStatusCode() === 200) {
+            if (! $response) {
+                $outcomes[$token->id] = ['ok' => false, 'status' => null, 'codes' => ['UNREACHABLE']];
+
+                continue;
+            }
+
+            if ($response->getStatusCode() === 200) {
+                $outcomes[$token->id] = ['ok' => true, 'status' => 200, 'codes' => []];
+
                 continue;
             }
 
             $status = $response->getStatusCode();
             $error = json_decode((string) $response->getBody(), true)['error'] ?? [];
-            $codes = collect($error['details'] ?? [])->pluck('errorCode')->filter()->all();
+            $codes = array_values(collect($error['details'] ?? [])->pluck('errorCode')->filter()->all());
             Log::warning('FCM push rejected.', ['status' => $status, 'codes' => $codes]);
+            $outcomes[$token->id] = ['ok' => false, 'status' => $status, 'codes' => $codes ?: [(string) ($error['status'] ?? 'HTTP_'.$status)]];
 
             $badToken = in_array('UNREGISTERED', $codes, true)
                 || $status === 404
@@ -456,6 +521,8 @@ class NativePushNotifier
                 Cache::forget($this->fcmCacheKey());
             }
         }
+
+        return $outcomes;
     }
 
     /**
@@ -463,10 +530,19 @@ class NativePushNotifier
      */
     private function fcmAccessToken(): ?string
     {
+        $this->fcmProblem = null;
         $projectId = config('services.fcm.project_id');
-        $path = config('services.fcm.credentials_path');
+        $path = $this->fcmCredentialsPath();
 
-        if (! $projectId || ! is_string($path) || ! is_readable($path)) {
+        if (! $projectId || $path === null) {
+            $this->fcmProblem = 'FCM_PROJECT_ID or FCM_CREDENTIALS_PATH is not set.';
+
+            return null;
+        }
+
+        if (! is_readable($path)) {
+            $this->fcmProblem = 'The FCM key file is missing or unreadable at FCM_CREDENTIALS_PATH.';
+
             return null;
         }
 
@@ -479,7 +555,8 @@ class NativePushNotifier
         $credentials = json_decode((string) file_get_contents($path), true);
 
         if (! is_array($credentials) || empty($credentials['client_email']) || empty($credentials['private_key'])) {
-            Log::warning('FCM credentials file is not a service account key.');
+            $this->fcmProblem = 'The FCM key file is not a service account key.';
+            Log::warning($this->fcmProblem);
 
             return null;
         }
@@ -497,7 +574,8 @@ class NativePushNotifier
         $key = openssl_pkey_get_private($credentials['private_key']);
 
         if ($key === false || ! openssl_sign($input, $signature, $key, OPENSSL_ALGO_SHA256)) {
-            Log::warning('FCM service account key could not sign.');
+            $this->fcmProblem = 'The FCM service account key could not sign.';
+            Log::warning($this->fcmProblem);
 
             return null;
         }
@@ -510,6 +588,9 @@ class NativePushNotifier
         ])));
 
         if (! $response || $response->getStatusCode() !== 200) {
+            $this->fcmProblem = $response
+                ? 'Google refused the FCM key (HTTP '.$response->getStatusCode().'). Is it for project '.$projectId.'?'
+                : 'The server could not reach oauth2.googleapis.com.';
             Log::warning('FCM access token request failed.', ['status' => $response?->getStatusCode()]);
 
             return null;
@@ -519,12 +600,28 @@ class NativePushNotifier
         $accessToken = $body['access_token'] ?? null;
 
         if (! is_string($accessToken) || $accessToken === '') {
+            $this->fcmProblem = 'Google returned no FCM access token.';
+
             return null;
         }
 
         Cache::put($this->fcmCacheKey(), $accessToken, max(60, (int) ($body['expires_in'] ?? 3600) - 300));
 
         return $accessToken;
+    }
+
+    /** `FCM_CREDENTIALS_PATH`; a relative path is taken from the app root. */
+    private function fcmCredentialsPath(): ?string
+    {
+        $path = config('services.fcm.credentials_path');
+
+        if (! is_string($path) || trim($path) === '') {
+            return null;
+        }
+
+        $path = trim($path);
+
+        return str_starts_with($path, '/') ? $path : base_path($path);
     }
 
     private function fcmCacheKey(): string
