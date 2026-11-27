@@ -173,6 +173,11 @@ watch(sharer, (tile) => {
 });
 
 function remoteVideo(userId) {
+    // Camera off: show the avatar, not the frozen last frame.
+    if (calls.remoteCamera?.[userId] === false && !calls.remoteSharing?.[userId]) {
+        return false;
+    }
+
     const tracks = calls.remoteStreams[userId]?.getVideoTracks?.() || [];
 
     return tracks.some((track) => track.readyState === 'live' && track.enabled && !track.muted);

@@ -114,6 +114,9 @@ export const useCallStore = defineStore('calls', () => {
     const cameraOn = ref(false);
     const sharing = ref(false);
     const remoteSharing = ref({});
+    // What each person says about their camera. A camera turned off often
+    // leaves the last frame on screen with no `mute` event, so this decides.
+    const remoteCamera = ref({});
     const elapsed = ref(0);
     const busy = ref(false);
 
@@ -1148,9 +1151,7 @@ export const useCallStore = defineStore('calls', () => {
             });
         };
 
-        if (sharing.value) {
-            sendSignal(key, 'status', { sharing: true });
-        }
+        sendSignal(key, 'status', localStatus());
 
         pc.oniceconnectionstatechange = () => {
             updateConnection();
@@ -1309,6 +1310,10 @@ export const useCallStore = defineStore('calls', () => {
                 ...remoteSharing.value,
                 [key]: Boolean(payload?.sharing),
             };
+
+            if (typeof payload?.camera === 'boolean') {
+                remoteCamera.value = { ...remoteCamera.value, [key]: payload.camera };
+            }
 
             return;
         }
@@ -1544,6 +1549,9 @@ export const useCallStore = defineStore('calls', () => {
                 const sharingNext = { ...remoteSharing.value };
                 delete sharingNext[peerId];
                 remoteSharing.value = sharingNext;
+                const cameraNext = { ...remoteCamera.value };
+                delete cameraNext[peerId];
+                remoteCamera.value = cameraNext;
             }
         }
     }
@@ -1624,6 +1632,7 @@ export const useCallStore = defineStore('calls', () => {
         remoteStreams.value = {};
         remoteAudio.value = {};
         remoteSharing.value = {};
+        remoteCamera.value = {};
 
         if (screenTrack) {
             screenTrack.stop();
@@ -1657,6 +1666,7 @@ export const useCallStore = defineStore('calls', () => {
         local?.getAudioTracks().forEach((track) => {
             track.enabled = micOn.value;
         });
+        announceStatus();
     }
 
     async function applyOutgoingVideo() {
@@ -1703,6 +1713,7 @@ export const useCallStore = defineStore('calls', () => {
             }
 
             refreshPreview();
+            announceStatus();
 
             return;
         }
@@ -1724,6 +1735,7 @@ export const useCallStore = defineStore('calls', () => {
                     cameraTrack = null;
                     cameraOn.value = false;
                     refreshPreview();
+                    announceStatus();
                 }
             };
 
@@ -1736,6 +1748,7 @@ export const useCallStore = defineStore('calls', () => {
             }
 
             refreshPreview();
+            announceStatus();
         } catch {
             notice('Could not turn on the camera.');
         }
@@ -1769,7 +1782,7 @@ export const useCallStore = defineStore('calls', () => {
             track.contentHint = 'detail';
             screenTrack = track;
             sharing.value = true;
-            announceShare(true);
+            announceStatus();
             track.onended = () => {
                 if (sharing.value) {
                     stopSharing();
@@ -1783,9 +1796,16 @@ export const useCallStore = defineStore('calls', () => {
         }
     }
 
-    function announceShare(active) {
+    /** Mic, camera and screen share, the same shape the phone app sends. */
+    function localStatus() {
+        return { sharing: sharing.value, mic: micOn.value, camera: cameraOn.value };
+    }
+
+    function announceStatus() {
+        const status = localStatus();
+
         for (const peerId of peers.keys()) {
-            sendSignal(peerId, 'status', { sharing: active });
+            sendSignal(peerId, 'status', status);
         }
     }
 
@@ -1793,7 +1813,7 @@ export const useCallStore = defineStore('calls', () => {
         const track = screenTrack;
         screenTrack = null;
         sharing.value = false;
-        announceShare(false);
+        announceStatus();
 
         if (track) {
             track.onended = null;
@@ -1820,6 +1840,7 @@ export const useCallStore = defineStore('calls', () => {
         cameraOn,
         sharing,
         remoteSharing,
+        remoteCamera,
         elapsed,
         busy,
         inCall,
