@@ -455,7 +455,7 @@ class NativePushNotifier
             return [];
         }
 
-        $url = 'https://fcm.googleapis.com/v1/projects/'.config('services.fcm.project_id').'/messages:send';
+        $url = 'https://fcm.googleapis.com/v1/projects/'.$this->fcmProjectId().'/messages:send';
         // FCM data values must all be strings.
         $data = array_map(fn ($value) => match (true) {
             is_bool($value) => $value ? 'true' : 'false',
@@ -531,17 +531,24 @@ class NativePushNotifier
     private function fcmAccessToken(): ?string
     {
         $this->fcmProblem = null;
-        $projectId = config('services.fcm.project_id');
         $path = $this->fcmCredentialsPath();
 
-        if (! $projectId || $path === null) {
+        if ($path === null) {
             $this->fcmProblem = 'FCM_PROJECT_ID or FCM_CREDENTIALS_PATH is not set.';
 
             return null;
         }
 
         if (! is_readable($path)) {
-            $this->fcmProblem = 'The FCM key file is missing or unreadable at FCM_CREDENTIALS_PATH.';
+            $this->fcmProblem = 'The FCM key file is missing or unreadable at '.config('services.fcm.credentials_path').'.';
+
+            return null;
+        }
+
+        $projectId = $this->fcmProjectId();
+
+        if ($projectId === null) {
+            $this->fcmProblem = 'FCM_PROJECT_ID is not set and the key file names no project.';
 
             return null;
         }
@@ -624,9 +631,29 @@ class NativePushNotifier
         return str_starts_with($path, '/') ? $path : base_path($path);
     }
 
+    /** `FCM_PROJECT_ID`, or the `project_id` inside the service account key. */
+    private function fcmProjectId(): ?string
+    {
+        $projectId = config('services.fcm.project_id');
+
+        if (is_string($projectId) && trim($projectId) !== '') {
+            return trim($projectId);
+        }
+
+        $path = $this->fcmCredentialsPath();
+
+        if ($path === null || ! is_readable($path)) {
+            return null;
+        }
+
+        $fromKey = json_decode((string) file_get_contents($path), true)['project_id'] ?? null;
+
+        return is_string($fromKey) && $fromKey !== '' ? $fromKey : null;
+    }
+
     private function fcmCacheKey(): string
     {
-        return 'native-push:fcm-token:'.config('services.fcm.project_id');
+        return 'native-push:fcm-token:'.$this->fcmProjectId();
     }
 
     // ---------------------------------------------------------------- HTTP
