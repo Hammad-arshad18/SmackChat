@@ -123,8 +123,47 @@ class NativePushTest extends TestCase
         $this->assertSame(['ExponentPushToken[lin]'], array_column($messages, 'to'));
         $this->assertSame('Ada Lovelace: New message', $messages[0]['body']);
         $this->assertSame('message', $messages[0]['data']['type']);
+        $this->assertSame('messages', $messages[0]['channelId']);
         $this->assertSame($workspace->slug, $messages[0]['data']['workspace']);
         $this->assertStringContainsString('?m=v1.', $messages[0]['data']['url']);
+
+        foreach ($client->sent as $request) {
+            $this->assertStringNotContainsString('launch number', $request['body']);
+        }
+    }
+
+    public function test_a_message_reaches_android_over_fcm_without_the_text(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $grace = $this->member($workspace, 'Grace');
+        $client = $this->fakeClient();
+        $this->configureProviders();
+
+        $this->register($grace, 'android', 'fcm', 'fcm:grace');
+
+        $this->actingAs($owner, 'sanctum');
+        E2eParty::register($this)
+            ->send($this, $workspace->slug, 'general', 'The launch number is 42.')
+            ->assertCreated();
+
+        $this->assertCount(0, $client->to('exp.host'));
+        $fcm = $client->to('fcm.googleapis.com');
+        $this->assertCount(1, $fcm);
+        $message = json_decode($fcm[0]['body'], true)['message'];
+        $this->assertSame('fcm:grace', $message['token']);
+        $this->assertArrayNotHasKey('notification', $message);
+        $this->assertSame('HIGH', $message['android']['priority']);
+        $this->assertArrayNotHasKey('collapse_key', $message['android']);
+        $this->assertContainsOnly('string', $message['data']);
+
+        // The shape expo-notifications draws by itself on Android.
+        $this->assertSame('general', $message['data']['title']);
+        $this->assertSame('Ada Lovelace: New message', $message['data']['message']);
+        $this->assertSame('messages', $message['data']['channelId']);
+        $data = json_decode($message['data']['body'], true);
+        $this->assertSame('message', $data['type']);
+        $this->assertStringContainsString('?m=v1.', $data['url']);
+        $this->assertSame($data['tag'], $message['data']['tag']);
 
         foreach ($client->sent as $request) {
             $this->assertStringNotContainsString('launch number', $request['body']);
@@ -190,6 +229,12 @@ class NativePushTest extends TestCase
         $this->assertSame((string) $call['id'], $message['data']['call_id']);
         $this->assertSame('false', $message['data']['is_dm']);
         $this->assertContainsOnly('string', $message['data']);
+        $this->assertSame('Ada Lovelace', $message['data']['title']);
+        $this->assertSame('Huddle in #general', $message['data']['message']);
+        $this->assertSame('calls', $message['data']['channelId']);
+        $this->assertSame('incoming-call', $message['data']['categoryId']);
+        $this->assertSame('smack-call-'.$call['id'], $message['data']['tag']);
+        $this->assertSame($call['id'], json_decode($message['data']['body'], true)['call_id']);
 
         // Only Sam falls back to Expo; Lin's phone rings through CallKit.
         $expo = $client->to('exp.host');
@@ -197,6 +242,8 @@ class NativePushTest extends TestCase
         $fallback = json_decode($expo[0]['body'], true);
         $this->assertSame(['ExponentPushToken[sam]'], array_column($fallback, 'to'));
         $this->assertSame('call', $fallback[0]['data']['type']);
+        $this->assertSame('calls', $fallback[0]['channelId']);
+        $this->assertSame('incoming-call', $fallback[0]['categoryId']);
 
         // Nobody answers and the caller hangs up.
         $client->sent = [];
@@ -213,7 +260,13 @@ class NativePushTest extends TestCase
 
         $fcm = $client->to('fcm.googleapis.com');
         $this->assertCount(1, $fcm);
-        $this->assertSame('call-ended', json_decode($fcm[0]['body'], true)['message']['data']['type']);
+        $ended = json_decode($fcm[0]['body'], true)['message']['data'];
+        $this->assertSame('call-ended', $ended['type']);
+        // Same tag as the ring, so "Missed call" takes its place in the tray.
+        $this->assertSame('smack-call-'.$call['id'], $ended['tag']);
+        $this->assertSame('Missed call', $ended['title']);
+        $this->assertSame('Missed call from Ada Lovelace', $ended['message']);
+        $this->assertSame('messages', $ended['channelId']);
         // The access token is reused, not fetched again.
         $this->assertCount(0, $client->to('oauth2.googleapis.com'));
 
@@ -221,6 +274,44 @@ class NativePushTest extends TestCase
         $this->assertEqualsCanonicalizing(['ExponentPushToken[lin]', 'ExponentPushToken[sam]'], array_column($missed, 'to'));
         $this->assertSame('Missed call', $missed[0]['title']);
         $this->assertSame('Missed call from Ada Lovelace', $missed[0]['body']);
+        $this->assertSame('messages', $missed[0]['channelId']);
+    }
+
+    public function test_a_call_answered_elsewhere_clears_the_android_ring_silently(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $lin = $this->member($workspace, 'Lin');
+        $grace = $this->member($workspace, 'Grace');
+        $client = $this->fakeClient();
+        $this->configureProviders();
+
+        $this->register($grace, 'android', 'fcm', 'fcm:grace');
+
+        $call = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->assertCreated()
+            ->json('call');
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/join")
+            ->assertOk();
+
+        $client->sent = [];
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/leave")
+            ->assertOk();
+        $this->actingAs($lin, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$call['id']}/leave")
+            ->assertOk();
+
+        $fcm = $client->to('fcm.googleapis.com');
+        $this->assertCount(1, $fcm);
+        $ended = json_decode($fcm[0]['body'], true)['message']['data'];
+        $this->assertSame('call-ended', $ended['type']);
+        $this->assertSame('true', $ended['answered']);
+        // No title or text: nothing is drawn, the app takes the ring away.
+        $this->assertSame('', $ended['title']);
+        $this->assertSame('', $ended['message']);
+        $this->assertCount(0, $client->to('exp.host'));
     }
 
     public function test_a_direct_call_rings_with_the_call_kind(): void

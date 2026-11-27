@@ -21,7 +21,8 @@ use Throwable;
  * Push for the native app, beside `WebPushNotifier`, with the same payloads
  * (`PushPayloads`).
  *
- * - Messages go through the Expo Push API to `expo` tokens.
+ * - Messages go through the Expo Push API to `expo` tokens (iOS) and as FCM
+ *   data messages to `fcm` tokens (Android), which need no Expo project.
  * - Rings go to iOS as an APNs VoIP push (PushKit → CallKit) and to Android
  *   as a high-priority FCM data message (full-screen call notification), so
  *   the phone rings while the app is closed. Someone with only an Expo token
@@ -36,6 +37,13 @@ class NativePushNotifier
 
     private const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
+    /** Android notification channels and the call category the app creates. */
+    public const CHANNEL_MESSAGES = 'messages';
+
+    public const CHANNEL_CALLS = 'calls';
+
+    public const CATEGORY_CALL = 'incoming-call';
+
     private ?ClientInterface $http = null;
 
     public function useClient(ClientInterface $client): void
@@ -46,7 +54,7 @@ class NativePushNotifier
     public function notify(Channel $channel, User $author, Message $message, string $excerpt): void
     {
         $tokens = DevicePushToken::query()
-            ->where('kind', DevicePushToken::EXPO)
+            ->whereIn('kind', [DevicePushToken::EXPO, DevicePushToken::FCM])
             ->whereIn('user_id', PushPayloads::channelAudience($channel))
             ->where('user_id', '!=', $author->id)
             ->get();
@@ -57,9 +65,16 @@ class NativePushNotifier
 
         $payload = PushPayloads::message($channel, $author, $message, $excerpt);
 
-        $this->sendExpo($tokens, $payload, [
+        $this->sendExpo($tokens->where('kind', DevicePushToken::EXPO), $payload, [
             'sound' => 'default',
             'priority' => 'high',
+            'channelId' => self::CHANNEL_MESSAGES,
+        ]);
+
+        // Android phones take FCM straight from Firebase, so they need no
+        // Expo project: the app's notification module draws it natively.
+        $this->sendFcm($tokens->where('kind', DevicePushToken::FCM), $payload, null, null, [
+            'channelId' => self::CHANNEL_MESSAGES,
         ]);
     }
 
@@ -80,14 +95,23 @@ class NativePushNotifier
         $ringable = $this->ringableUserIds($tokens);
 
         $this->sendVoip($tokens->where('kind', DevicePushToken::VOIP), $payload, $expiresAt, 'call-'.$call->id);
-        $this->sendFcm($tokens->where('kind', DevicePushToken::FCM), $payload, $ringFor, 'call-'.$call->id);
+        $this->sendFcm($tokens->where('kind', DevicePushToken::FCM), $payload, $ringFor, 'call-'.$call->id, [
+            'channelId' => self::CHANNEL_CALLS,
+            'categoryId' => self::CATEGORY_CALL,
+        ]);
 
         // No PushKit/FCM token on file (older build, or permission refused):
         // fall back to a plain notification so the call is not silent.
         $this->sendExpo(
             $tokens->where('kind', DevicePushToken::EXPO)->whereNotIn('user_id', $ringable),
             $payload,
-            ['sound' => 'default', 'priority' => 'high', 'ttl' => $ringFor],
+            [
+                'sound' => 'default',
+                'priority' => 'high',
+                'ttl' => $ringFor,
+                'channelId' => self::CHANNEL_CALLS,
+                'categoryId' => self::CATEGORY_CALL,
+            ],
         );
     }
 
@@ -110,17 +134,22 @@ class NativePushNotifier
         // A VoIP push must be reported to CallKit, so the app ends the call
         // it is showing (or reports and ends one at once if it has none).
         $this->sendVoip($tokens->where('kind', DevicePushToken::VOIP), $payload, now()->addMinute()->getTimestamp(), 'call-'.$call->id);
-        $this->sendFcm($tokens->where('kind', DevicePushToken::FCM), $payload, 60, 'call-'.$call->id);
+        // Android: the same `tag` replaces the ring in the tray. Unanswered,
+        // it becomes "Missed call"; answered elsewhere, it is a silent data
+        // message and the app takes the ring away.
+        $this->sendFcm($tokens->where('kind', DevicePushToken::FCM), $payload, 60, 'call-'.$call->id, [
+            'channelId' => self::CHANNEL_MESSAGES,
+            'silent' => $answered,
+        ]);
 
         // A visible note: "Missed call" for anyone not answered, and the
         // fallback ring's replacement for people who got the Expo ring.
-        $expo = $tokens->where('kind', DevicePushToken::EXPO);
+        // Phones on FCM already got theirs above.
+        $fcmUsers = $tokens->where('kind', DevicePushToken::FCM)->pluck('user_id')->unique()->all();
+        $expo = $tokens->where('kind', DevicePushToken::EXPO)
+            ->whereNotIn('user_id', $answered ? $ringable : $fcmUsers);
 
-        if ($answered) {
-            $expo = $expo->whereNotIn('user_id', $ringable);
-        }
-
-        $this->sendExpo($expo, $payload, ['sound' => 'default', 'priority' => 'high']);
+        $this->sendExpo($expo, $payload, ['sound' => 'default', 'priority' => 'high', 'channelId' => self::CHANNEL_MESSAGES]);
     }
 
     /**
@@ -348,10 +377,17 @@ class NativePushNotifier
     // ----------------------------------------------------------------- FCM
 
     /**
+     * Data only, no `notification` block, in the shape expo-notifications
+     * reads on Android: `title` and `message` are drawn natively (even with
+     * the app closed) on `channelId`, `tag` replaces an earlier notice with
+     * the same tag, and `body` is the JSON the app sees as the notification's
+     * data. The flat fields stay for the app's background task.
+     *
      * @param  Collection<int, DevicePushToken>  $tokens
      * @param  array<string, mixed>  $payload
+     * @param  array{channelId?: string, categoryId?: string, silent?: bool}  $display
      */
-    private function sendFcm(Collection $tokens, array $payload, int $ttl, string $collapseKey): void
+    private function sendFcm(Collection $tokens, array $payload, ?int $ttl, ?string $collapseKey, array $display = []): void
     {
         if ($tokens->isEmpty()) {
             return;
@@ -373,17 +409,25 @@ class NativePushNotifier
             default => (string) $value,
         }, $payload);
 
+        $silent = (bool) ($display['silent'] ?? false);
+        $data = array_merge($data, array_filter([
+            'title' => $silent ? '' : (string) ($payload['title'] ?? ''),
+            'message' => $silent ? '' : (string) ($payload['body'] ?? ''),
+            'body' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+            'channelId' => $display['channelId'] ?? null,
+            'categoryId' => $display['categoryId'] ?? null,
+        ], fn ($value) => $value !== null));
+        $android = array_filter([
+            'priority' => 'HIGH',
+            'ttl' => $ttl !== null ? $ttl.'s' : null,
+            'collapse_key' => $collapseKey,
+        ], fn ($value) => $value !== null);
+
         foreach ($tokens as $token) {
-            // Data only, no `notification` block: the app draws the
-            // full-screen call UI itself, even when it was closed.
             $body = json_encode(['message' => [
                 'token' => $token->token,
                 'data' => $data,
-                'android' => [
-                    'priority' => 'HIGH',
-                    'ttl' => $ttl.'s',
-                    'collapse_key' => $collapseKey,
-                ],
+                'android' => $android,
             ]], JSON_UNESCAPED_UNICODE);
 
             $response = $this->send(new Request('POST', $url, [
