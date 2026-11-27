@@ -13,6 +13,7 @@ use Base64Url\Base64Url;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Minishlink\WebPush\VAPID;
 use Psr\Http\Client\ClientInterface;
@@ -337,6 +338,47 @@ class CallsTest extends TestCase
         $this->artisan('smackchat:sweep-calls')->assertSuccessful();
 
         $this->assertSame(Call::ENDED, Call::findOrFail($call['id'])->status);
+    }
+
+    public function test_the_workspace_adds_short_lived_cloudflare_turn_servers(): void
+    {
+        [$owner, $workspace] = $this->office();
+
+        config()->set('smackchat.call_cloudflare_turn_key_id', 'turn-key-1');
+        config()->set('smackchat.call_cloudflare_turn_token', 'turn-secret');
+        Http::fake([
+            'rtc.live.cloudflare.com/*' => Http::response(['iceServers' => [
+                ['urls' => ['stun:stun.cloudflare.com:3478', 'stun:stun.cloudflare.com:53']],
+                ['urls' => ['turn:turn.cloudflare.com:3478?transport=udp', 'turn:turn.cloudflare.com:53?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'], 'username' => 'u1', 'credential' => 'c1'],
+            ]], 201),
+        ]);
+
+        foreach ([1, 2] as $load) {
+            $ice = $this->actingAs($owner, 'sanctum')
+                ->getJson("/api/workspaces/{$workspace->slug}")
+                ->assertOk()
+                ->json('workspace.calls.ice_servers');
+        }
+
+        $this->assertContains(['urls' => ['stun:stun.cloudflare.com:3478']], $ice);
+        $this->assertContains([
+            'urls' => ['turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'],
+            'username' => 'u1',
+            'credential' => 'c1',
+        ], $ice);
+
+        // Cached: one request for both loads, with the key on the server only.
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request->url() === 'https://rtc.live.cloudflare.com/v1/turn/keys/turn-key-1/credentials/generate-ice-servers'
+            && $request->hasHeader('Authorization', 'Bearer turn-secret')
+            && $request['ttl'] === 86400);
+        $this->assertStringNotContainsString('turn-secret', json_encode($ice));
+
+        // A call carries the list too, for a phone whose workspace is still loading.
+        $started = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general'])
+            ->assertCreated();
+        $this->assertSame($ice, $started->json('ice_servers'));
     }
 
     public function test_the_workspace_exposes_stun_and_credentialed_turn_servers(): void

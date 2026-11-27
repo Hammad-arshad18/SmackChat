@@ -44,6 +44,13 @@ business decisions that cannot live in the repository. Work top to bottom.
   `SMACKCHAT_CALL_TURN_URL` to one or more comma-separated TURN URLs, plus
   `SMACKCHAT_CALL_TURN_USERNAME` and `SMACKCHAT_CALL_TURN_CREDENTIAL` when your
   TURN server needs credentials (hosted TURN or coturn).
+  Shared hosting cannot run coturn: use Cloudflare Realtime TURN instead
+  (dashboard → Realtime → TURN, create a key; $0.05 per GB relayed) and set
+  `SMACKCHAT_CALL_CLOUDFLARE_TURN_KEY_ID` and
+  `SMACKCHAT_CALL_CLOUDFLARE_TURN_TOKEN`. The server fetches day-long
+  credentials, caches them, and sends them with the workspace and with each
+  call start and join. Without any TURN server, calls between phones on
+  mobile data often fail to connect.
   There is no media server: every participant sends one stream to every other
   participant, so keep `SMACKCHAT_CALL_GROUP_LIMIT` at 8 or lower. The free
   plan is one-to-one; groups belong to the archive plan. Tapping a call push
@@ -72,6 +79,12 @@ business decisions that cannot live in the repository. Work top to bottom.
     account key JSON with the Firebase Cloud Messaging role. Set
     `FCM_PROJECT_ID` and `FCM_CREDENTIALS_PATH` (path to the JSON, outside
     `public/`).
+  `FCM_CREDENTIALS_PATH` may be relative to the app root (for example
+  `storage/app/firebase-service-account.json`; `storage/app` is gitignored and
+  deploys never delete it). Run `php artisan config:cache` after editing
+  `.env`. To check a live server, open the app's **Settings → Send a test
+  notification**: it says whether FCM is set up, why not, and whether Firebase
+  accepted this phone.
   Without them the app still gets an ordinary Expo notification for a call,
   but nothing rings. The server needs outbound HTTPS (and HTTP/2 for APNs, so
   PHP's curl must be built with HTTP/2) to `exp.host`, `api.push.apple.com`,

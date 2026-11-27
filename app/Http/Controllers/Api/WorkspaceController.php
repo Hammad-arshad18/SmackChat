@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\Workspace;
 use App\Services\AblyPublisher;
 use App\Services\AuditLogger;
+use App\Services\CallIceServers;
 use App\Services\WorkspaceProvisioner;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -69,7 +70,7 @@ class WorkspaceController extends ApiController
                 'calls' => [
                     'limit' => $workspace->callLimit(),
                     'group_enabled' => $workspace->plan === 'archive',
-                    'ice_servers' => $this->iceServers(),
+                    'ice_servers' => app(CallIceServers::class)->all(),
                 ],
             ],
         ]);
@@ -151,29 +152,5 @@ class WorkspaceController extends ApiController
         if ($workspace->logo_path) {
             Storage::disk('local')->delete($workspace->logo_path);
         }
-    }
-
-    /**
-     * STUN servers help peers find a path. A TURN server relays media when a
-     * direct path is impossible; it needs a username and credential.
-     *
-     * @return list<array<string, string>>
-     */
-    private function iceServers(): array
-    {
-        $servers = array_map(
-            fn (string $url) => ['urls' => $url],
-            config('smackchat.call_ice_servers', []),
-        );
-
-        foreach (config('smackchat.call_turn_urls', []) as $turn) {
-            $servers[] = array_filter([
-                'urls' => (string) $turn,
-                'username' => config('smackchat.call_turn_username'),
-                'credential' => config('smackchat.call_turn_credential'),
-            ], fn ($value) => filled($value));
-        }
-
-        return $servers;
     }
 }

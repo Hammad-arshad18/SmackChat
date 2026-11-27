@@ -37,4 +37,10 @@ return [
     ))),
     'call_turn_username' => env('SMACKCHAT_CALL_TURN_USERNAME'),
     'call_turn_credential' => env('SMACKCHAT_CALL_TURN_CREDENTIAL'),
+
+    // Hosted TURN from Cloudflare Realtime, for servers that cannot run coturn
+    // (shared hosting). Short-lived credentials are fetched and cached; see
+    // App\Services\CloudflareTurn.
+    'call_cloudflare_turn_key_id' => env('SMACKCHAT_CALL_CLOUDFLARE_TURN_KEY_ID'),
+    'call_cloudflare_turn_token' => env('SMACKCHAT_CALL_CLOUDFLARE_TURN_TOKEN'),
 ];

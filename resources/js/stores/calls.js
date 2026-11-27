@@ -132,6 +132,10 @@ export const useCallStore = defineStore('calls', () => {
     let leaving = false;
     const dismissed = new Set();
     const peers = new Map();
+    // Candidates from a connection the other side is only now building: they
+    // travel beside its offer and often arrive first. Held per person until
+    // that offer (or answer) names the connection, then handed to it.
+    const earlyCandidates = new Map();
     let signalTimer = null;
     let syncTimer = null;
     let ringTimer = null;
@@ -955,6 +959,7 @@ export const useCallStore = defineStore('calls', () => {
         peers.delete(key);
 
         if (!keepStream) {
+            earlyCandidates.delete(key);
             const next = { ...remoteStreams.value };
             delete next[key];
             remoteStreams.value = next;
@@ -1242,6 +1247,14 @@ export const useCallStore = defineStore('calls', () => {
         const startsOver = type === 'offer' || (type === 'refresh' && payload?.hello);
         let state = peers.get(key);
 
+        if (type === 'candidate' && conn && state?.remoteConn && state.remoteConn !== conn) {
+            const held = earlyCandidates.get(key) || [];
+            held.push({ conn, payload: stripSession(payload) });
+            earlyCandidates.set(key, held.slice(-60));
+
+            return Promise.resolve();
+        }
+
         // A signal from a newer session of that person means their tab was
         // reloaded; an offer or hello from another connection means they
         // rebuilt it. Our connection belongs to the old one: replace it.
@@ -1261,6 +1274,12 @@ export const useCallStore = defineStore('calls', () => {
 
         if (conn && (type === 'offer' || type === 'answer' || (type === 'refresh' && payload?.hello))) {
             state.remoteConn = conn;
+            const held = earlyCandidates.get(key);
+
+            if (held?.length) {
+                state.pending.push(...held.filter((item) => item.conn === conn).map((item) => item.payload));
+                earlyCandidates.set(key, held.filter((item) => item.conn !== conn));
+            }
         }
 
         return enqueue(state, () => applySignal(state, from, type, payload));
@@ -1377,11 +1396,13 @@ export const useCallStore = defineStore('calls', () => {
                 // The offer comes from a different connection than the one we
                 // hold (the other side rebuilt). Start fresh and accept it.
                 console.warn('[huddle] rebuilding connection after a mismatched offer', error?.message);
-                const { remoteSession, remoteConn } = state;
+                const { remoteSession, remoteConn, pending } = state;
                 closePeer(key, { keepStream: true });
                 const fresh = ensurePeer(key);
                 fresh.remoteSession = remoteSession;
                 fresh.remoteConn = remoteConn;
+                // Candidates that came with this offer belong to the new connection.
+                fresh.pending.push(...pending);
                 clearTimeout(fresh.offerTimer);
                 await applySignal(fresh, from, type, payload);
 
@@ -1597,6 +1618,7 @@ export const useCallStore = defineStore('calls', () => {
         }
 
         peers.clear();
+        earlyCandidates.clear();
         mediaReady = false;
         mySession = '';
         remoteStreams.value = {};
