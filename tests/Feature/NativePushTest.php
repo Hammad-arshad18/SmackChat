@@ -421,7 +421,7 @@ class NativePushTest extends TestCase
         $this->actingAs($grace, 'sanctum')->postJson('/api/push/native/test')
             ->assertOk()
             ->assertJsonPath('fcm.configured', false)
-            ->assertJsonPath('fcm.problem', 'The FCM key file is missing or unreadable at FCM_CREDENTIALS_PATH.')
+            ->assertJsonPath('fcm.problem', 'The FCM key file is missing or unreadable at storage/app/missing-key.json.')
             ->assertJsonPath('devices.0.ok', false)
             ->assertJsonPath('devices.0.error', 'FCM is not set up on the server.');
 
@@ -576,6 +576,24 @@ class NativePushTest extends TestCase
         $this->tempFiles[] = $path;
 
         return $path;
+    }
+
+    public function test_an_empty_fcm_project_id_is_read_from_the_key_file(): void
+    {
+        $grace = User::factory()->create();
+        $client = $this->fakeClient();
+        $this->configureProviders();
+        config(['services.fcm.project_id' => '']);
+        $this->register($grace, 'android', 'fcm', 'fcm:grace');
+
+        $this->actingAs($grace, 'sanctum')->postJson('/api/push/native/test')
+            ->assertOk()
+            ->assertJsonPath('fcm.configured', true)
+            ->assertJsonPath('devices.0.ok', true);
+
+        $fcm = $client->to('fcm.googleapis.com');
+        $this->assertCount(1, $fcm);
+        $this->assertStringContainsString('/v1/projects/smack-test/messages:send', $fcm[0]['url']);
     }
 
     public function test_heartbeats_do_not_use_up_push_registration_or_the_test(): void

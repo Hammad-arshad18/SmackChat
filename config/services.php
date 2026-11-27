@@ -55,8 +55,11 @@ return [
     ],
 
     'fcm' => [
-        'project_id' => env('FCM_PROJECT_ID'),
-        'credentials_path' => env('FCM_CREDENTIALS_PATH'),
+        // Empty values fall back: the key at its usual place, and the project
+        // id read from that key, so a stray empty line in .env cannot turn
+        // Android push off.
+        'project_id' => env('FCM_PROJECT_ID') ?: null,
+        'credentials_path' => env('FCM_CREDENTIALS_PATH') ?: 'storage/app/firebase-service-account.json',
     ],
 
 ];
