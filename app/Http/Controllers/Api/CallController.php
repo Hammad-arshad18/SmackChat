@@ -31,8 +31,9 @@ class CallController extends ApiController
 
         abort_if($channel->type === Channel::ATTENDANCE, 422, 'Huddles are not available in Timesheets.');
 
-        $created = $calls->liveCall($channel) === null;
+        $before = $calls->liveCall($channel)?->id;
         $call = $calls->start($channel, $request->user(), $data['kind'] ?? Call::AUDIO);
+        $created = $call->id !== $before;
         $call->load('workspace');
 
         return response()->json([

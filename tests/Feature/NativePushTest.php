@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Mail\RegistrationCodeMail;
+use App\Models\CallParticipant;
 use App\Models\DevicePushToken;
 use App\Models\User;
 use App\Models\Workspace;
@@ -594,6 +595,42 @@ class NativePushTest extends TestCase
         $fcm = $client->to('fcm.googleapis.com');
         $this->assertCount(1, $fcm);
         $this->assertStringContainsString('/v1/projects/smack-test/messages:send', $fcm[0]['url']);
+    }
+
+    public function test_a_call_left_behind_does_not_swallow_the_next_ring(): void
+    {
+        [$owner, $workspace] = $this->office();
+        $grace = $this->member($workspace, 'Grace');
+        $client = $this->fakeClient();
+        $this->configureProviders();
+        $this->register($grace, 'android', 'fcm', 'fcm:grace');
+
+        $first = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general', 'kind' => 'audio'])
+            ->assertCreated()
+            ->json('call.id');
+        $this->actingAs($grace, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$first}/join")
+            ->assertOk();
+
+        // Grace's app is swiped away mid-call: she never leaves, she just
+        // stops checking in. The caller hangs up and calls again later.
+        $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls/{$first}/leave")
+            ->assertSuccessful();
+        CallParticipant::query()->where('call_id', $first)->update(['last_seen_at' => now()->subMinutes(10)]);
+        $ringsBefore = count($client->to('fcm.googleapis.com'));
+
+        $second = $this->actingAs($owner, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/calls", ['channel' => 'general', 'kind' => 'audio'])
+            ->assertCreated()
+            ->assertJsonPath('created', true)
+            ->json('call.id');
+
+        $this->assertNotSame($first, $second);
+        $rings = array_slice($client->to('fcm.googleapis.com'), $ringsBefore);
+        $types = array_map(fn ($sent) => json_decode(json_decode($sent['body'], true)['message']['data']['body'], true)['type'], $rings);
+        $this->assertContains('call', $types);
     }
 
     public function test_heartbeats_do_not_use_up_push_registration_or_the_test(): void
