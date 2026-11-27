@@ -55,10 +55,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/push/key', [PushController::class, 'key']);
     Route::put('/push/subscription', [PushController::class, 'store']);
     Route::delete('/push/subscription', [PushController::class, 'destroy']);
-    Route::post('/push/test', [PushController::class, 'test'])->middleware('throttle:presence');
-    Route::put('/push/native', [NativePushController::class, 'store'])->middleware('throttle:presence');
+    Route::post('/push/test', [PushController::class, 'test'])->middleware('throttle:push-test');
+    Route::put('/push/native', [NativePushController::class, 'store'])->middleware('throttle:push');
     Route::delete('/push/native', [NativePushController::class, 'destroy']);
-    Route::post('/push/native/test', [NativePushController::class, 'test'])->middleware('throttle:presence');
+    Route::post('/push/native/test', [NativePushController::class, 'test'])->middleware('throttle:push-test');
     Route::get('/attachments/{attachment}', [AttachmentController::class, 'show'])->middleware('throttle:attachments');
 
     Route::get('/workspaces', [WorkspaceController::class, 'index']);
