@@ -77,6 +77,11 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('search', fn (Request $request) => Limit::perMinute(60)->by($byUser($request)));
         RateLimiter::for('exports', fn (Request $request) => Limit::perMinute(5)->by($byUser($request)));
         RateLimiter::for('presence', fn (Request $request) => Limit::perMinute(10)->by($byUser($request)));
+        // Push has its own buckets: sharing `presence` with heartbeats and key
+        // backups meant a phone's token could be refused at sign-in, and the
+        // test button said "Too many attempts" before it was ever pressed.
+        RateLimiter::for('push', fn (Request $request) => Limit::perMinute(30)->by($byUser($request)));
+        RateLimiter::for('push-test', fn (Request $request) => Limit::perMinute(6)->by($byUser($request)));
         RateLimiter::for('calls', fn (Request $request) => Limit::perMinute(60)->by($byUser($request)));
         // Signal polling alone is ~90 a minute, plus ICE candidates for every
         // peer in a group call. A dropped answer leaves audio one-way.

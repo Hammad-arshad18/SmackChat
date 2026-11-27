@@ -578,6 +578,20 @@ class NativePushTest extends TestCase
         return $path;
     }
 
+    public function test_heartbeats_do_not_use_up_push_registration_or_the_test(): void
+    {
+        $grace = User::factory()->create();
+        $this->fakeClient();
+
+        for ($beat = 0; $beat < 10; $beat++) {
+            $this->actingAs($grace, 'sanctum')->postJson('/api/heartbeat')->assertSuccessful();
+        }
+        $this->actingAs($grace, 'sanctum')->postJson('/api/heartbeat')->assertStatus(429);
+
+        $this->register($grace, 'android', 'fcm', 'fcm:grace');
+        $this->actingAs($grace, 'sanctum')->postJson('/api/push/native/test')->assertOk();
+    }
+
     private function register(User $user, string $platform, string $kind, string $token): void
     {
         $this->actingAs($user, 'sanctum')->putJson('/api/push/native', [
