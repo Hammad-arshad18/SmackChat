@@ -98,9 +98,19 @@ class NativePushNotifier
         $ringable = $this->ringableUserIds($tokens);
 
         $this->sendVoip($tokens->where('kind', DevicePushToken::VOIP), $payload, $expiresAt, 'call-'.$call->id);
-        $this->sendFcm($tokens->where('kind', DevicePushToken::FCM), $payload, $ringFor, 'call-'.$call->id, [
+        $fcm = $tokens->where('kind', DevicePushToken::FCM);
+        $outcomes = $this->sendFcm($fcm, $payload, $ringFor, 'call-'.$call->id, [
             'channelId' => self::CHANNEL_CALLS,
             'categoryId' => self::CATEGORY_CALL,
+        ]);
+        // One line per ring in laravel.log: the way to tell "never sent" from
+        // "Firebase refused" from "delivered but not shown" on a live server.
+        Log::info('Call ring sent.', [
+            'call_id' => $call->id,
+            'android_phones' => $fcm->count(),
+            'accepted' => collect($outcomes)->where('ok', true)->count(),
+            'refused' => collect($outcomes)->where('ok', false)->map(fn ($outcome) => implode(',', $outcome['codes']))->values()->all(),
+            'fcm_problem' => $fcm->isNotEmpty() && $outcomes === [] ? $this->fcmProblem : null,
         ]);
 
         // No PushKit/FCM token on file (older build, or permission refused):

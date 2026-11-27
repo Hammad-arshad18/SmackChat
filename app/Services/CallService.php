@@ -43,7 +43,22 @@ class CallService
             $existing = $this->liveCall($channel);
 
             if ($existing) {
-                return $this->join($existing, $user);
+                // A call left behind (the other phone was swiped away, or a
+                // tab closed) is still "live" until someone prunes it. Joining
+                // it would never ring anyone, so only a call that someone else
+                // is really in is joined; a leftover is ended and rung afresh.
+                $this->pruneStale($existing);
+                $existing->refresh();
+                $othersSeated = $existing->participants()
+                    ->whereNull('left_at')
+                    ->where('user_id', '!=', $user->id)
+                    ->exists();
+
+                if ($existing->status === Call::LIVE && $othersSeated) {
+                    return $this->join($existing, $user);
+                }
+
+                $this->end($existing);
             }
 
             $call = Call::create([
