@@ -406,6 +406,29 @@ class OfficeChatTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_heartbeats_and_key_backups_do_not_use_up_the_punch_limit(): void
+    {
+        $owner = $this->openOffice();
+        $worker = User::factory()->create();
+        $workspace = $owner->currentWorkspace;
+        app(WorkspaceProvisioner::class)->admit($workspace, $worker, 'member');
+
+        for ($beat = 0; $beat < 20; $beat++) {
+            $this->actingAs($worker, 'sanctum')->postJson('/api/heartbeat')->assertSuccessful();
+        }
+        for ($backup = 0; $backup < 15; $backup++) {
+            $status = $this->actingAs($worker, 'sanctum')
+                ->putJson('/api/e2e/vault/channels', ['channels' => []])
+                ->status();
+            $this->assertNotSame(429, $status);
+        }
+
+        Carbon::setTestNow(Carbon::parse('2026-11-05 09:00:00', 'UTC'));
+        $this->actingAs($worker, 'sanctum')
+            ->postJson("/api/workspaces/{$workspace->slug}/attendance/punch", ['action' => 'check_in'])
+            ->assertOk();
+    }
+
     public function test_unrestricted_attendance_still_checks_in_and_out_without_presence(): void
     {
         $owner = $this->openOffice();

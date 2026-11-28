@@ -38,11 +38,11 @@ Route::post('/mobile/invitations/{token}/accept', [MobileAuthController::class, 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::post('/mobile/logout', [MobileAuthController::class, 'logout']);
-    Route::post('/e2e/devices', [E2eController::class, 'device'])->middleware('throttle:presence');
+    Route::post('/e2e/devices', [E2eController::class, 'device'])->middleware('throttle:e2e');
     Route::get('/e2e/vault', [E2eController::class, 'showVault']);
-    Route::put('/e2e/vault', [E2eController::class, 'updateVault'])->middleware('throttle:presence');
+    Route::put('/e2e/vault', [E2eController::class, 'updateVault'])->middleware('throttle:e2e');
     Route::get('/e2e/vault/channels/{channel}', [E2eController::class, 'showBackup'])->whereNumber('channel');
-    Route::put('/e2e/vault/channels', [E2eController::class, 'updateBackups'])->middleware('throttle:presence');
+    Route::put('/e2e/vault/channels', [E2eController::class, 'updateBackups'])->middleware('throttle:e2e');
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me', [AuthController::class, 'updateProfile']);
     Route::get('/me/export', [AuthController::class, 'export'])->middleware('throttle:exports');
@@ -50,7 +50,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/me/avatar', [AuthController::class, 'updateAvatar']);
     Route::delete('/me/avatar', [AuthController::class, 'destroyAvatar']);
     Route::get('/avatars/{user}', [AuthController::class, 'avatar']);
-    Route::post('/heartbeat', [AuthController::class, 'heartbeat'])->middleware('throttle:presence');
+    Route::post('/heartbeat', [AuthController::class, 'heartbeat'])->middleware('throttle:heartbeat');
     Route::get('/realtime/token', [RealtimeController::class, 'token']);
     Route::get('/push/key', [PushController::class, 'key']);
     Route::put('/push/subscription', [PushController::class, 'store']);

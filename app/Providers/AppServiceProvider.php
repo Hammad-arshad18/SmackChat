@@ -76,7 +76,15 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('uploads', fn (Request $request) => Limit::perMinute(20)->by($byUser($request)));
         RateLimiter::for('search', fn (Request $request) => Limit::perMinute(60)->by($byUser($request)));
         RateLimiter::for('exports', fn (Request $request) => Limit::perMinute(5)->by($byUser($request)));
-        RateLimiter::for('presence', fn (Request $request) => Limit::perMinute(10)->by($byUser($request)));
+        // Clicks a person makes: punch, new channel or DM, invite, schedule.
+        // Background traffic has its own buckets below; when heartbeats and
+        // key backups shared this one at 10 a minute, a few window switches
+        // were enough for the next punch to say "Too Many Attempts."
+        RateLimiter::for('presence', fn (Request $request) => Limit::perMinute(30)->by($byUser($request)));
+        // One every 30 s plus one per window focus (the client spaces those out).
+        RateLimiter::for('heartbeat', fn (Request $request) => Limit::perMinute(30)->by($byUser($request)));
+        // Device key and key backups: a burst at sign-in, then one per new channel.
+        RateLimiter::for('e2e', fn (Request $request) => Limit::perMinute(60)->by($byUser($request)));
         // Push has its own buckets: sharing `presence` with heartbeats and key
         // backups meant a phone's token could be refused at sign-in, and the
         // test button said "Too many attempts" before it was ever pressed.
