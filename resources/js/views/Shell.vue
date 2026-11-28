@@ -103,7 +103,16 @@ async function maybeAskPermissions() {
     }
 }
 
+let lastBeat = 0;
+
 function beat() {
+    // Focus fires on every window switch; one beat per 10 s is plenty.
+    const now = Date.now();
+    if (now - lastBeat < 10000) {
+        return;
+    }
+    lastBeat = now;
+
     api.post('/heartbeat').catch(() => {});
     if (office.slug) {
         office.refreshMembers().catch(() => {});

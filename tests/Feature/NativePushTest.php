@@ -638,7 +638,7 @@ class NativePushTest extends TestCase
         $grace = User::factory()->create();
         $this->fakeClient();
 
-        for ($beat = 0; $beat < 10; $beat++) {
+        for ($beat = 0; $beat < 30; $beat++) {
             $this->actingAs($grace, 'sanctum')->postJson('/api/heartbeat')->assertSuccessful();
         }
         $this->actingAs($grace, 'sanctum')->postJson('/api/heartbeat')->assertStatus(429);
